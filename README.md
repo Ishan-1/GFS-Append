@@ -5,3 +5,9 @@
 ![](assets/1.jpeg)
 ![](assets/2.jpeg)
 
+
+### Chunkserver Progress
+- Made class for Chunk
+- Working on Chunk Directory to store metadata 
+
+
