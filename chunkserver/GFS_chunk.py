@@ -5,11 +5,12 @@ class Chunk:
         self.version = version
         # Construct chunk filename
         self.chunk_filename = f"{self.file_name}_{self.chunk_number}_{self.version}"
-        # Write data to chunk file
-        try:
+        # Write data to chunk file if it doesn't exist
+        if not os.path.exists(self.chunk_filename):    
+          try:
             with open(self.chunk_filename, 'wb') as f:
                 f.write(data)
-        except:
+          except:
             print("Error creating chunk file")
     
     def delete(self):
