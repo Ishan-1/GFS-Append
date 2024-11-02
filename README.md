@@ -8,7 +8,9 @@
 
 ### Chunkserver Progress
 - Made class for Chunk
-- Working on Chunk Directory to store metadata 
+- Made Chunk Directory to store metadata 
 - Made a common message structure that works with JSON
+- Completed handling of connections
+- Completed once append for chunkserver
 
 

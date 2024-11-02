@@ -3,8 +3,10 @@ class Chunk:
     def __init__(self,chunk_id:int,file_name:str,version:int,chunk_number:int,data):
         self.chunk_id = chunk_id
         self.version = version
+        self.file_name = file_name
+        self.chunk_number = chunk_number
         # Construct chunk filename
-        self.chunk_filename = f"{self.file_name}_{self.chunk_number}_{self.version}"
+        self.chunk_filename = f"{file_name}_{chunk_number}_{self.version}"
         # Write data to chunk file if it doesn't exist
         if not os.path.exists(self.chunk_filename):    
           try:
@@ -19,7 +21,7 @@ class Chunk:
     
     def read(self):
         try:
-         with self.chunk_filename as f:
+         with open(self.chunk_filename) as f:
             return f.read()
         except:
             print("Error reading chunk file")
