@@ -1,162 +1,105 @@
-from dataclasses import dataclass
-from typing import List, Tuple, Dict
+import socket
+import threading
+import message  # Custom message manager module
 
-@dataclass
-class ChunkLocation:
-    chunk_handle: str
-    chunk_servers: List[str]
-    primary: str = None
-    secondary: List[str] = None
+class Client:
+    def __init__(self, master_host='localhost', master_port=5000):
+        self.master_host = master_host
+        self.master_port = master_port
+        self.message_manager = message.Message_Manager()
     
-@dataclass
-class ChunkInfo:
-    chunk_handle: str
-    offset: int
-    size: int
-
-class GFSClient:
-    CHUNK_SIZE = 64 * 1024 * 1024  # 64MB in bytes
-    
-    def __init__(self, master_address: str):
-        self.master_address = master_address
-        self.metadata_cache = {}  # Cache for chunk locations
-        self.lease_holders = {}   # Cache for lease holders
-        
-    def _get_chunk_index(self, offset: int) -> int:
-        """Calculate chunk index from offset"""
-        return offset // self.CHUNK_SIZE
-    
-    def _get_chunk_offset(self, offset: int) -> int:
-        """Calculate offset within chunk"""
-        return offset % self.CHUNK_SIZE
-    
-    def _contact_master(self, operation: str, **kwargs) -> Dict:
-        """Contact master server with given operation and parameters"""
+    def connect_to_master(self):
         try:
-            # In real implementation, this would use gRPC
-            # Here we simulate the master server response
-            if operation == "get_chunk_locations":
-                filename = kwargs.get("filename")
-                chunk_index = kwargs.get("chunk_index")
-                # Simulate master response
-                return {
-                    "chunk_handle": f"{filename}-chunk-{chunk_index}",
-                    "locations": ["chunkserver1:50051", "chunkserver2:50051", "chunkserver3:50051"]
-                }
-            elif operation == "create_file":
-                return {"status": "success"}
-            elif operation == "delete_file":
-                return {"status": "success"}
-            elif operation == "get_append_location":
-                return {
-                    "chunk_handle": kwargs.get("chunk_handle"),
-                    "primary": "chunkserver1:50051",
-                    "secondary": ["chunkserver2:50051", "chunkserver3:50051"]
-                }
-        except Exception as e:
-            raise Exception(f"Failed to contact master: {str(e)}")
+            master_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            master_socket.connect((self.master_host, self.master_port))
+            return master_socket
+        except ConnectionError:
+            print("Error connecting to master server.")
+            return None
     
-    def _contact_chunkserver(self, server: str, operation: str, **kwargs) -> Dict:
-        """Contact chunk server with given operation and parameters"""
-        try:
-            # In real implementation, this would use gRPC
-            # Here we simulate the chunkserver response
-            if operation == "read_chunk":
-                return {"data": b"sample data"}
-            elif operation == "append_chunk":
-                return {"status": "success", "offset": kwargs.get("offset", 0)}
-        except Exception as e:
-            raise Exception(f"Failed to contact chunkserver {server}: {str(e)}")
-
-    def read(self, filename: str, offset: int, length: int) -> bytes:
-        """Read length bytes from filename starting at offset"""
-        data = bytearray()
-        current_offset = offset
-        bytes_remaining = length
+    def get_chunk_location(self, operation, file_name, chunk_id, chunk_number=None):
+        master_socket = self.connect_to_master()
+        if master_socket:
+            # Send request to master for chunk location details
+            request_data = {
+                'Operation': operation,
+                'File_Name': file_name,
+                'Chunk_ID': chunk_id,
+                'Chunk_Number': chunk_number
+            }
+            self.message_manager.send_message(master_socket, 'REQUEST', request_data)
+            response_type, response_data = self.message_manager.receive_message(master_socket)
+            master_socket.close()
+            
+            if response_type == 'RESPONSE' and response_data['Status'] == 'SUCCESS':
+                return response_data['Chunkservers'], response_data.get('Primary')
+            else:
+                print("Failed to retrieve chunk location from master.")
+                return None, None
+        return None, None
+    
+    def perform_operation(self, operation, file_name, chunk_id, chunk_number=None, start_byte=None, end_byte=None, data=None):
+        chunkservers, primary = self.get_chunk_location(operation, file_name, chunk_id, chunk_number)
         
-        while bytes_remaining > 0:
-            # Calculate chunk index and offset within chunk
-            chunk_index = self._get_chunk_index(current_offset)
-            chunk_offset = self._get_chunk_offset(current_offset)
-            
-            # Get chunk locations from master
-            chunk_info = self._contact_master(
-                "get_chunk_locations",
-                filename=filename,
-                chunk_index=chunk_index
-            )
-            
-            # Calculate how much to read from this chunk
-            bytes_to_read = min(
-                bytes_remaining,
-                self.CHUNK_SIZE - chunk_offset
-            )
-            
-            # Try each chunk server until successful
-            success = False
-            for server in chunk_info["locations"]:
-                try:
-                    chunk_data = self._contact_chunkserver(
-                        server,
-                        "read_chunk",
-                        chunk_handle=chunk_info["chunk_handle"],
-                        offset=chunk_offset,
-                        length=bytes_to_read
-                    )
-                    data.extend(chunk_data["data"])
-                    success = True
+        if chunkservers:
+            for chunkserver_id in chunkservers:
+                success = self.connect_to_chunkserver(chunkserver_id, operation, file_name, chunk_id, start_byte, end_byte, data)
+                if success:
+                    print(f"{operation} operation successful on chunkserver {chunkserver_id}.")
                     break
-                except Exception as e:
-                    continue
-                    
-            if not success:
-                raise Exception(f"Failed to read chunk {chunk_index}")
-                
-            current_offset += bytes_to_read
-            bytes_remaining -= bytes_to_read
+                else:
+                    print(f"Chunkserver {chunkserver_id} failed. Trying next replica...")
+            else:
+                print(f"{operation} operation failed. All replicas unavailable.")
+        else:
+            print("No chunkservers available for the requested chunk.")
+    
+    def connect_to_chunkserver(self, chunkserver_id, operation, file_name, chunk_id, start_byte, end_byte, data):
+        try:
+            chunkserver_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            # Assuming chunkserver_id corresponds to address
+            chunkserver_socket.connect(chunkserver_id)
+            # Send operation request to the chunkserver
+            request_data = {
+                'Operation': operation,
+                'File_Name': file_name,
+                'Chunk_ID': chunk_id,
+                'Start_Byte': start_byte,
+                'End_Byte': end_byte,
+                'Data': data
+            }
+            self.message_manager.send_message(chunkserver_socket, 'REQUEST', request_data)
+            response_type, response_data = self.message_manager.receive_message(chunkserver_socket)
+            chunkserver_socket.close()
             
-        return bytes(data)
-
-    def append(self, filename: str, data: bytes) -> int:
-        """Append data to file, return offset where data was appended"""
-        # Get last chunk information from master
-        chunk_info = self._contact_master(
-            "get_chunk_locations",
-            filename=filename,
-            chunk_index=-1  # Last chunk
-        )
+            return response_type == 'RESPONSE' and response_data['Status'] == 'SUCCESS'
         
-        # Get primary and secondary locations for append
-        append_info = self._contact_master(
-            "get_append_location",
-            chunk_handle=chunk_info["chunk_handle"]
-        )
-        
-        # Send append request to primary
-        try:
-            result = self._contact_chunkserver(
-                append_info["primary"],
-                "append_chunk",
-                chunk_handle=chunk_info["chunk_handle"],
-                data=data,
-                secondary=append_info["secondary"]
-            )
-            return result["offset"]
-        except Exception as e:
-            raise Exception(f"Failed to append: {str(e)}")
+        except ConnectionError:
+            print(f"Failed to connect to chunkserver {chunkserver_id}")
+            return False
+    
+    def cli_loop(self):
+        while True:
+            operation = input("Enter operation (CREATE, DELETE, READ, APPEND): ").strip().upper()
+            file_name = input("Enter file name: ").strip()
+            chunk_id = input("Enter chunk ID: ").strip()
+            chunk_number = int(input("Enter chunk number: ").strip()) if operation in ['CREATE', 'APPEND'] else None
+            
+            if operation == 'READ':
+                start_byte = int(input("Enter start byte: ").strip())
+                end_byte = int(input("Enter end byte: ").strip())
+                self.perform_operation(operation, file_name, chunk_id, start_byte=start_byte, end_byte=end_byte)
+            elif operation == 'CREATE':
+                self.perform_operation(operation, file_name, chunk_id, chunk_number=chunk_number)
+            elif operation == 'DELETE':
+                self.perform_operation(operation, file_name, chunk_id)
+            elif operation == 'APPEND':
+                data = input("Enter data to append: ").strip().encode()
+                self.perform_operation(operation, file_name, chunk_id, chunk_number=chunk_number, data=data)
+            else:
+                print("Invalid operation. Try again.")
 
-    def create(self, filename: str) -> bool:
-        """Create a new file"""
-        try:
-            result = self._contact_master("create_file", filename=filename)
-            return result["status"] == "success"
-        except Exception as e:
-            raise Exception(f"Failed to create file: {str(e)}")
-
-    def delete(self, filename: str) -> bool:
-        """Delete a file"""
-        try:
-            result = self._contact_master("delete_file", filename=filename)
-            return result["status"] == "success"
-        except Exception as e:
-            raise Exception(f"Failed to delete file: {str(e)}")
+# Entry point for the client application
+if __name__ == "__main__":
+    client = Client()
+    client.cli_loop()

@@ -33,7 +33,7 @@ def cleanup_client_appends():
             del pending_appends[transaction_id]
 
 
-
+# TODO :- chunk_directory is basicaly Master server
 def handle_prepare_append(client_socket, message_manager, request_data, chunkserver_id, chunk_directory):
     """Handle the prepare phase of 2PC initiated by client"""
     transaction_id = request_data.get('Transaction_ID')

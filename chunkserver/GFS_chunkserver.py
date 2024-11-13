@@ -1,9 +1,7 @@
 import os
-import GFS_chunk
 import GFS_chunk_metadata
 import socket
 import message
-import json
 import time
 import threading
 from GFS_append import cleanup_client_appends, handle_prepare_append, handle_commit_append, handle_abort_append
