@@ -1,4 +1,5 @@
 import os
+import sys
 import GFS_chunk_metadata
 import socket
 import message
@@ -7,190 +8,193 @@ import threading
 from GFS_append import cleanup_client_appends, handle_prepare_append, handle_commit_append, handle_abort_append
 
 
-chunkserver_id = 0
-chunk_directory = GFS_chunk_metadata.Chunk_Directory()
+class ChunkServer:
+    def __init__(self,port,directory):
+        self.chunkserver_id = 0
+        self.chunk_directory = GFS_chunk_metadata.Chunk_Directory()
+        self.message_manager = message.Message_Manager()
+        self.master_socket = None
+        self.server_socket = None
+        self.port=port
+        self.directory=directory
 
-def send_heartbeat(message_manager, connection_socket):
-    sleep_time = 5
-    while True:
+    def send_heartbeat(self):
+        sleep_time = 5
+        while True:
+            try:
+                self.message_manager.send_message(self.master_socket, 'HEARTBEAT', {'Operation': 'HEARTBEAT'})
+            except:
+                print("Error sending heartbeat")
+            finally:
+                time.sleep(sleep_time)
+
+    def handle_read(self, client_socket, request_data):
+        chunk_id = request_data['Chunk_ID']
+        chunk = self.chunk_directory.get_chunk(chunk_id)
+        if chunk is None:
+            response = {'Status': 'FAILED', 'Error': 'Chunk not found'}
+        else:
+            response = {'Status': 'SUCCESS', 'Data': chunk.read()}
+        self.message_manager.send_message(client_socket, 'RESPONSE', response)
+
+    def client_thread(self,client_socket):
         try:
-           message_manager.send_message(connection_socket, 'HEARTBEAT', {'Operation': 'HEARTBEAT'})
-        except:
-            print("Error sending heartbeat")
-        finally:
-          time.sleep(sleep_time)
-
-
-def handle_read(client_socket, message_manager, request_data):
-    chunk_id = request_data['Chunk_ID']
-    chunk = chunk_directory.get_chunk(chunk_id)
-    if chunk is None:
-        response = {'Status': 'FAILED', 'Error': 'Chunk not found'}
-    else:
-        response = {'Status': 'SUCCESS', 'Data': chunk.read()}
-    message_manager.send_message(client_socket, 'RESPONSE', response)
-
-
-
-def client_thread(client_socket):
-    client_message_manager = message.Message_Manager()
-    try:
-        while True:  # Keep connection alive for the entire 2PC protocol
-            request_type, request_data = client_message_manager.receive_message(client_socket)
-            if not request_type:  # Connection closed by client
-                break
-                
-            if request_type == 'REQUEST':
-                if request_data['Operation'] == 'READ':
-                    handle_read(client_socket, client_message_manager, request_data)
-                elif request_data['Operation'] == 'PREPARE_APPEND':
-                    handle_prepare_append(client_socket, client_message_manager, request_data, chunkserver_id, chunk_directory)
-                elif request_data['Operation'] == 'COMMIT_APPEND':
-                    handle_commit_append(client_socket, client_message_manager, request_data, chunk_directory)
-                elif request_data['Operation'] == 'ABORT_APPEND':
-                    handle_abort_append(client_socket, client_message_manager, request_data)
-    finally:
-        # Clean up any pending appends from this client
-        cleanup_client_appends()
-        client_socket.close()
-
-
-            
-def update_leases(connection_socket):
-    message_manager = message.Message_Manager()
-    while True:
-        for chunk_id, lease in list(chunk_directory.lease_dict.items()):
-            chunk_directory.lease_dict[chunk_id]['Time'] -= 1
-            if lease['Time'] == 5:
-                # Renew the lease
-                message_manager.send_message(connection_socket, 'REQUEST', 
-                                          {'Operation': 'RENEW_LEASE', 'Chunk_ID': chunk_id})
-                response, data = message_manager.receive_message(connection_socket)
-                if response == 'RESPONSE':
-                    if data['Status'] == 'SUCCESS':
-                        chunk_directory.lease_dict[chunk_id]['Time'] = 60  # Reset lease time
-                    else:
-                        # If lease renewal fails, remove the lease
-                        del chunk_directory.lease_dict[chunk_id]
-        time.sleep(1)  # Check leases every second
-            
-            
-def client_chunkserver_thread():
-    message_manager = message.Message_Manager()
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.bind(('localhost', 5000 + chunkserver_id))
-    server_socket.listen(5)
-    
-    # Accept client connections
-    while True:
-        client_socket, address = server_socket.accept()
-        # Start a new thread to handle the client request
-        client_handler = threading.Thread(target=client_thread, args=(client_socket,))
-        client_handler.start()
-
-
-def handle_master_commands(connection_socket):
-    message_manager = message.Message_Manager()
-    while True:
-        try:
-            request_type, request_data = message_manager.receive_message(connection_socket)
-            if request_type == 'REQUEST':
-                if request_data['Operation'] == 'CREATE':
-                    chunk_id = request_data['Chunk_ID']
-                    file_name = request_data['File_Name']
-                    chunk_number = request_data['Chunk_Number']
-                    is_primary = request_data['Primary']
-                    data = request_data['Data']
-                    # Create new chunk
-                    if chunk_directory.add_chunk(chunk_id,file_name,chunk_number,data,is_primary):
-                       response = {'Status': 'SUCCESS'}
-                    else:
-                          response = {'Status': 'FAILED', 'Error': 'Could not create chunk'}
+                request_type, request_data = self.message_manager.receive_message(client_socket)
+                if request_type == 'REQUEST':
+                    if request_data['Operation'] == 'READ':
+                        self.handle_read(client_socket, request_data)
+                    elif request_data['Operation'] == 'PREPARE_APPEND':
+                        handle_prepare_append(client_socket, self.message_manager, request_data, self.chunkserver_id, self.chunk_directory)
+                    elif request_data['Operation'] == 'COMMIT_APPEND':
+                        handle_commit_append(client_socket, self.message_manager, request_data, self.chunk_directory)
+                    elif request_data['Operation'] == 'ABORT_APPEND':
+                        handle_abort_append(client_socket, self.message_manager, request_data)
                     
-                elif request_data['Operation'] == 'DELETE':
-                    chunk_id = request_data['Chunk_ID']
-                    if chunk_directory.delete_chunk(chunk_id):
-                        response = {'Status': 'SUCCESS'}
-                    else:
-                        response = {'Status': 'FAILED', 'Error': 'Chunk not found'}
-                        
-                message_manager.send_message(connection_socket, 'RESPONSE', response)
         except Exception as e:
-            print(f"Error handling master command: {e}")
-            break
+            print(f"Error handling client request: {e}")
+        finally:
+            # Clean up any pending appends from this client
+            cleanup_client_appends()
+            client_socket.close()
 
+    def update_leases(self):
+        while True:
+            for chunk_id, lease in list(self.chunk_directory.lease_dict.items()):
+                self.chunk_directory.lease_dict[chunk_id]['Time'] -= 1
+                if lease['Time'] == 5:
+                    # Renew the lease
+                    self.message_manager.send_message(self.master_socket, 'REQUEST',
+                                                      {'Operation': 'RENEW_LEASE', 'Chunk_ID': chunk_id})
+                    response, data = self.message_manager.receive_message(self.master_socket)
+                    if response == 'RESPONSE':
+                        if data['Status'] == 'SUCCESS':
+                            self.chunk_directory.lease_dict[chunk_id]['Time'] = 60  # Reset lease time
+                        else:
+                            # If lease renewal fails, remove the lease
+                            del self.chunk_directory.lease_dict[chunk_id]
+            time.sleep(1)  # Check leases every second
 
-def start_chunkserver():
-    global chunkserver_id
-    
-    # Create a directory for the chunkserver
-    os.makedirs('chunkserver', exist_ok=True)
-    
-    # Jump into the chunkserver directory
-    os.chdir('chunkserver')
-    
-    # Load the chunk directory from disk by looking for chunk files
-    for file in os.listdir():
-        if file.endswith('.chunk'):
-            # Load the chunk file
-            chunk_id = int(file.split('.')[0])
-            with open(file, 'rb') as f:
-                data = f.read()
-            # Add the chunk to the chunk directory
-            chunk_directory.add_chunk(chunk_id, '', 0, data)
+    def client_chunkserver_thread(self):
+        self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.client_socket.bind(('localhost', self.port))
+        print("Chunkserver listening for client requests on port", self.port)
+        self.client_socket.listen(5)
+        # Accept client connections
+        while True:
+            client_socket, address = self.client_socket.accept()
+            # Start a new thread to handle the client request
+            client_handler = threading.Thread(target=self.client_thread, args=(client_socket,))
+            client_handler.start()
+
+    def handle_master_commands(self):
+        while True:
+            try:
+                request_type, request_data = self.message_manager.receive_message(self.master_socket)
+                if request_type == 'REQUEST':
+                    if request_data['Operation'] == 'CREATE':
+                        chunk_id = request_data['Chunk_ID']
+                        file_name = request_data['File_Name']
+                        chunk_number = request_data['Chunk_Number']
+                        is_primary = request_data['Primary']
+                        data = request_data['Data']
+                        # Create new chunk
+                        if self.chunk_directory.add_chunk(chunk_id, file_name, chunk_number, data, is_primary):
+                            response = {'Status': 'SUCCESS'}
+                        else:
+                            response = {'Status': 'FAILED', 'Error': 'Could not create chunk'}
+
+                    elif request_data['Operation'] == 'DELETE':
+                        chunk_id = request_data['Chunk_ID']
+                        if self.chunk_directory.delete_chunk(chunk_id):
+                            response = {'Status': 'SUCCESS'}
+                        else:
+                            response = {'Status': 'FAILED', 'Error': 'Chunk not found'}
+                    self.message_manager.send_message(self.master_socket, 'RESPONSE', response) 
+                elif request_type == 'HEARTBEAT_ACK':
+                        print("Received heartbeat ACK from master")
+                else:
+                    print("Unknown request type from master")
+            except Exception as e:
+                print(f"Error handling master command: {e}")
+                break
             
-    # Connect to the master on port 5000
-    connection_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        connection_socket.connect(('localhost', 5000))
-    except ConnectionRefusedError:
-        print("Failed to connect to master server")
-        return
-        
-    # Register with the master
-    message_manager = message.Message_Manager()
-    message_manager.send_message(connection_socket, 'REQUEST', 
-                               {'Operation': 'REGISTER', 'Chunk_Directory': chunk_directory.chunk_dict})
-    
-    # Receive the master's response
-    response, data = message_manager.receive_message(connection_socket)
-    
-    # Check if the master accepted the registration
-    if response == 'RESPONSE' and data['Status'] == 'SUCCESS':
-        chunkserver_id = data['Chunkserver_ID']
-        
-        # Create threads for various operations
-        heartbeat_thread = threading.Thread(target=send_heartbeat, 
-                                         args=(message_manager, connection_socket))
-        lease_thread = threading.Thread(target=update_leases, 
-                                     args=(connection_socket,))
-        client_server_thread = threading.Thread(target=client_chunkserver_thread)
-        master_command_thread = threading.Thread(target=handle_master_commands, 
-                                              args=(connection_socket,))
-        
-        # Start all threads
-        heartbeat_thread.daemon = True
-        lease_thread.daemon = True
-        client_server_thread.daemon = True
-        master_command_thread.daemon = True
-        
-        heartbeat_thread.start()
-        lease_thread.start()
-        client_server_thread.start()
-        master_command_thread.start()
-        
-        print(f"Chunkserver {chunkserver_id} started successfully")
-        # Keep the main thread alive
+    def load_chunk_directory(self):
+        # Create a directory for the chunkserver
+        os.makedirs(self.directory, exist_ok=True)
+        # Jump into the chunkserver directory
+        os.chdir(self.directory)
+        # Load the chunk directory from disk by looking for chunk files
+        for file in os.listdir():
+            if file.endswith('.chunk'):
+                # Load the chunk file
+                chunk_id = int(file.split('.')[0])
+                with open(file, 'rb') as f:
+                    data = f.read()
+                # Add the chunk to the chunk directory
+                self.chunk_directory.add_chunk(chunk_id, '', 0, data)
+        os.chdir('..')
+    def start_chunkserver(self):
+        # Connect to the master on port 5000
+        self.master_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            print("\nShutting down chunkserver...")
-    else:
-        print("Registration with master failed")
-        connection_socket.close()
-        return
+            self.master_socket.connect(('localhost', 5000))
+        except ConnectionRefusedError:
+            print("Failed to connect to master server")
+            return
+
+        # Register with the master
+        self.message_manager.send_message(self.master_socket, 'REGISTER',
+                                          {'Address':('localhost', self.port)})
+
+        # Receive the master's response
+        response, data = self.message_manager.receive_message(self.master_socket)
+
+        # Check if the master accepted the registration
+        if response == 'RESPONSE' and data['Status'] == 'SUCCESS':
+            self.chunkserver_id = data['Chunkserver_ID']
+            print(f"Registered with master as chunkserver {self.chunkserver_id}")
+            
+            # Load the chunk directory from disk
+            self.load_chunk_directory()
+            # Send the directory to the master
+            self.message_manager.send_message(self.master_socket, 'CHUNK_DIRECTORY',
+                                              {'Chunk_Directory': self.chunk_directory.chunk_dict})
+            print("Sent chunk directory to master")           
+            # Create threads for various operations
+            heartbeat_thread = threading.Thread(target=self.send_heartbeat)
+            lease_thread = threading.Thread(target=self.update_leases)
+            client_server_thread = threading.Thread(target=self.client_chunkserver_thread)
+            master_command_thread = threading.Thread(target=self.handle_master_commands)
+
+            # Start all threads
+            heartbeat_thread.daemon = True
+            lease_thread.daemon = True
+            client_server_thread.daemon = True
+            master_command_thread.daemon = True
+
+            heartbeat_thread.start()
+            lease_thread.start()
+            client_server_thread.start()
+            master_command_thread.start()
+
+            print(f"Chunkserver {self.chunkserver_id} started successfully")
+            # Keep the main thread alive
+            try:
+                while True:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                print("\nShutting down chunkserver...")
+        else:
+            print("Registration with master failed")
+            self.master_socket.close()
+            return
 
 
 if __name__ == "__main__":
-    start_chunkserver()
+    if len(sys.argv) != 3:
+        print("Usage: python3 GFS_chunkserver.py port directory")
+        sys.exit(1)
+    port=int(sys.argv[1])
+    directory=sys.argv[2]
+    chunkserver = ChunkServer(port, directory)
+    chunkserver.start_chunkserver()
