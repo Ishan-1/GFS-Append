@@ -13,11 +13,71 @@ class ChunkServer:
         self.chunk_directory = GFS_chunk_metadata.Chunk_Directory()
         self.message_manager = message.Message_Manager()
         self.master_socket = None
+        self.client_socket = None
         self.port = port
         self.directory = directory
         # Track ongoing append transactions
         self.append_transactions = {}
+        
+    def send_heartbeat(self):
+        sleep_time = 5
+        while True:
+            try:
+                self.message_manager.send_message(self.master_socket, 'HEARTBEAT', {'Operation': 'HEARTBEAT'})
+            except:
+                print("Error sending heartbeat")
+            finally:
+                time.sleep(sleep_time)
 
+    def handle_read(self, client_socket, request_data):
+        chunk_id = request_data['Chunk_ID']
+        chunk = self.chunk_directory.get_chunk(chunk_id)
+        if chunk is None:
+            response = {'Status': 'FAILED', 'Error': 'Chunk not found'}
+        else:
+            response = {'Status': 'SUCCESS', 'Data': chunk.read()}
+        self.message_manager.send_message(client_socket, 'RESPONSE', response)
+
+    def client_thread(self,client_socket):
+        try:
+                request_type, request_data = self.message_manager.receive_message(client_socket)
+                if request_type == 'REQUEST':
+                    if request_data['Operation'] == 'READ':
+                        self.handle_read(client_socket, request_data)
+                    
+        except Exception as e:
+            print(f"Error handling client request: {e}")
+        finally:
+            client_socket.close()
+
+    def update_leases(self):
+        while True:
+            for chunk_id, lease in list(self.chunk_directory.lease_dict.items()):
+                self.chunk_directory.lease_dict[chunk_id]['Time'] -= 1
+                if lease['Time'] == 5:
+                    # Renew the lease
+                    self.message_manager.send_message(self.master_socket, 'REQUEST',
+                                                      {'Operation': 'RENEW_LEASE', 'Chunk_ID': chunk_id})
+                    response, data = self.message_manager.receive_message(self.master_socket)
+                    if response == 'RESPONSE':
+                        if data['Status'] == 'SUCCESS':
+                            self.chunk_directory.lease_dict[chunk_id]['Time'] = 60  # Reset lease time
+                        else:
+                            # If lease renewal fails, remove the lease
+                            del self.chunk_directory.lease_dict[chunk_id]
+            time.sleep(1)  # Check leases every second
+
+    def client_chunkserver_thread(self):
+        self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.client_socket.bind(('localhost', self.port))
+        print("Chunkserver listening for client requests on port", self.port)
+        self.client_socket.listen(5)
+        # Accept client connections
+        while True:
+            client_socket, address = self.client_socket.accept()
+            # Start a new thread to handle the client request
+            client_handler = threading.Thread(target=self.client_thread, args=(client_socket,))
+            client_handler.start()
     def handle_master_append_transaction(self, request_data):
         transaction_id = request_data['Transaction_ID']
         operation = request_data['Operation']
@@ -95,7 +155,8 @@ class ChunkServer:
             except Exception as e:
                 print(f"Error handling master command: {e}")
                 break
-            
+    
+    
     def load_chunk_directory(self):
         # Create a directory for the chunkserver
         os.makedirs(self.directory, exist_ok=True)
