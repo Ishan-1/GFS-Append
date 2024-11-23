@@ -86,7 +86,7 @@ class ChunkServer:
     def handle_master_append_transaction(self, request_data):
         transaction_id = request_data['Transaction_ID']
         operation = request_data['Operation']
-        chunk_id = f'{request_data['File_Name']}_{request_data['Chunk_Number']}'
+        chunk_id = f"{request_data['File_Name']}_{request_data['Chunk_Number']}"
         try:
             if operation == 'PREPARE':
                 # Verify chunk exists and is writable
@@ -145,7 +145,7 @@ class ChunkServer:
                             response = {'Status': 'FAILED', 'Error': 'Could not create chunk'}
 
                     elif request_data['Operation'] == 'DELETE':
-                        chunk_id = f'{request_data['File_Name']}_{request_data['Chunk_Number']}'
+                        chunk_id = f"{request_data['File_Name']}_{request_data['Chunk_Number']}"
                         if self.chunk_directory.delete_chunk(chunk_id):
                             response = {'Status': 'SUCCESS'}
                         else:
