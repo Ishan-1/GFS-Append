@@ -31,12 +31,16 @@ class ChunkServer:
                 time.sleep(sleep_time)
 
     def handle_read(self, client_socket, request_data):
-        chunk_id = request_data['Chunk_ID']
+        file_name = request_data['File_Name']
+        chunk_number = request_data['Chunk_Number']
+        chunk_id = f'{file_name}_{chunk_number}'
+        start = request_data['Start']
+        end = request_data['End']
         chunk = self.chunk_directory.get_chunk(chunk_id)
         if chunk is None:
             response = {'Status': 'FAILED', 'Error': 'Chunk not found'}
         else:
-            response = {'Status': 'SUCCESS', 'Data': chunk.read()}
+            response = {'Status': 'SUCCESS', 'Data': chunk.read(start,end)}
         self.message_manager.send_message(client_socket, 'RESPONSE', response)
 
     def client_thread(self,client_socket):
@@ -82,8 +86,7 @@ class ChunkServer:
     def handle_master_append_transaction(self, request_data):
         transaction_id = request_data['Transaction_ID']
         operation = request_data['Operation']
-        chunk_id = request_data['Chunk_ID']
-
+        chunk_id = f'{request_data['File_Name']}_{request_data['Chunk_Number']}'
         try:
             if operation == 'PREPARE':
                 # Verify chunk exists and is writable
@@ -131,19 +134,18 @@ class ChunkServer:
                         response = self.handle_master_append_transaction(request_data)
                         self.message_manager.send_message(self.master_socket, 'RESPONSE', response)
                     if request_data['Operation'] == 'CREATE':
-                        chunk_id = request_data['Chunk_ID']
                         file_name = request_data['File_Name']
                         chunk_number = request_data['Chunk_Number']
                         is_primary = request_data['Primary']
                         data = request_data['Data']
                         # Create new chunk
-                        if self.chunk_directory.add_chunk(chunk_id, file_name, chunk_number, data, is_primary):
+                        if self.chunk_directory.add_chunk(file_name, chunk_number, data, is_primary):
                             response = {'Status': 'SUCCESS'}
                         else:
                             response = {'Status': 'FAILED', 'Error': 'Could not create chunk'}
 
                     elif request_data['Operation'] == 'DELETE':
-                        chunk_id = request_data['Chunk_ID']
+                        chunk_id = f'{request_data['File_Name']}_{request_data['Chunk_Number']}'
                         if self.chunk_directory.delete_chunk(chunk_id):
                             response = {'Status': 'SUCCESS'}
                         else:

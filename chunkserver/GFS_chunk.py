@@ -1,8 +1,7 @@
 import os
 
 class Chunk:
-    def __init__(self, chunk_id: int, file_name: str, version: int, chunk_number: int, data: bytes):
-        self.chunk_id = chunk_id
+    def __init__(self, file_name: str, version: int, chunk_number: int, data: bytes):
         self.version = version
         self.file_name = file_name
         self.chunk_number = chunk_number
@@ -21,10 +20,11 @@ class Chunk:
         os.remove(self.chunk_filename)
         return not os.path.exists(self.chunk_filename)
     
-    def read(self):
+    def read(self,start,end):
         try:
             with open(self.chunk_filename, 'rb') as f:
-                return f.read()
+                f.seek(start)
+                return f.read(end-start)
         except Exception as e:
             return f"Error reading chunk file: {e}"
         
