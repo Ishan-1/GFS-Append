@@ -92,7 +92,6 @@ class MasterServer:
         while True:
             try:
                 request_type, request_data = self.message_manager.receive_message(conn)
-                print("Received message from Chunkserver ",chunkserver_id)
                 if request_type == 'HEARTBEAT':
                     # print("Heartbeat")
                     self.handle_heartbeat(chunkserver_id)

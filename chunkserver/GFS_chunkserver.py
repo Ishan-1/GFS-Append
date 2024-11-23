@@ -108,8 +108,8 @@ class ChunkServer:
 
     def update_leases(self):
         while True:
-            for chunk_id, lease in list(self.chunk_directory.lease_dict.items()):
-                self.chunk_directory.lease_dict[chunk_id]['Time'] -= 1
+            for chunk_id, lease in self.chunk_directory.lease_dict.items():
+                self.chunk_directory.lease_dict[chunk_id] -= 1
                 if lease['Time'] == 5:
                     # Renew the lease
                     self.message_manager.send_message(self.master_socket, 'REQUEST',
@@ -117,7 +117,7 @@ class ChunkServer:
                     response, data = self.message_manager.receive_message(self.master_socket)
                     if response == 'RESPONSE':
                         if data['Status'] == 'SUCCESS':
-                            self.chunk_directory.lease_dict[chunk_id]['Time'] = 60  # Reset lease time
+                            self.chunk_directory.lease_dict[chunk_id] = 60  # Reset lease time
                         else:
                             # If lease renewal fails, remove the lease
                             del self.chunk_directory.lease_dict[chunk_id]
@@ -249,6 +249,7 @@ class ChunkServer:
             
             # Load the chunk directory from disk
             self.load_chunk_directory()
+            os.chdir(self.directory)
             # Send the directory to the master
             self.message_manager.send_message(self.master_socket, 'CHUNK_DIRECTORY',
                                               {'Chunk_Directory': self.chunk_directory.chunk_dict})

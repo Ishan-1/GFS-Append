@@ -1,17 +1,17 @@
 import os
 
 class Chunk:
-    def __init__(self, file_name: str, version: int, chunk_number: int, data: bytes):
+    def __init__(self, file_name: str, version: int, chunk_number: int, data):
         self.version = version
         self.file_name = file_name
         self.chunk_number = chunk_number
         # Construct chunk filename
         self.chunk_filename = f"{file_name}_{chunk_number}_{version}"
-        
+        print(data)
         # Write data to chunk file if it doesn't exist
         if not os.path.exists(self.chunk_filename):
             try:
-                with open(self.chunk_filename, 'wb') as f:
+                with open(self.chunk_filename, 'w') as f:
                     f.write(data)
             except Exception as e:
                 print("Error creating chunk file:", e)
@@ -22,7 +22,7 @@ class Chunk:
     
     def read(self,start,end):
         try:
-            with open(self.chunk_filename, 'rb') as f:
+            with open(self.chunk_filename, 'r') as f:
                 f.seek(start)
                 return f.read(end-start)
         except Exception as e:
@@ -30,7 +30,7 @@ class Chunk:
         
     def append(self, data: bytes):
         try:
-            with open(self.chunk_filename, 'ab') as f:
+            with open(self.chunk_filename, 'a') as f:
                 f.write(data)
             # Rename chunk file to reflect new version
             new_filename = f"{self.file_name}_{self.chunk_number}_{self.version + 1}"
