@@ -231,60 +231,8 @@ class MasterServer:
             response = {'Status': 'FAILED', 'Error': 'Unknown operation'}
             self.message_manager.send_message(conn, 'RESPONSE', response)
 
-    # def handle_create(self, conn, file_name, data):
-    #     """Handle CREATE operation directly with chunkservers."""
-    #     data_length = len(data)
-    #     num_chunks = max(1, math.ceil(data_length / CHUNK_SIZE))
-    #     chunks = []
-    #     print("Attempting Create...")
 
-    #     # with self.lock:
-    #     # Create chunks and select chunkservers
-    #     for i in range(num_chunks):
-    #         Chunk_Number = self.next_Chunk_Number
-    #         self.next_Chunk_Number += 1
-            
-    #         selected_servers = self.select_chunkservers()
-    #         if not selected_servers:
-    #             response = {'Status': 'FAILED', 'Error': 'Insufficient chunkservers available'}
-    #             self.message_manager.send_message(conn, 'RESPONSE', response)
-    #             return
-            
-    #         chunk_data = data[i*CHUNK_SIZE : (i+1)*CHUNK_SIZE]
-    #         self.chunk_locations[Chunk_Number] = selected_servers
-    #         chunks.append({
-    #             'Chunk_Number': Chunk_Number,
-    #             'Servers': selected_servers,
-    #             'Data': chunk_data
-    #         })
-    #         self.file_chunks.setdefault(file_name, []).append(Chunk_Number)
 
-    #     # Send chunks to chunkservers
-    #     success = True
-    #     for chunk in chunks:
-    #         chunk_success = False
-    #         for cs_id in chunk['Servers']:
-    #             try:
-    #                 create_req = {
-    #                     'Operation': 'CREATE',
-    #                     'Chunk_Number': chunk['Chunk_Number'],
-    #                     'File_Name': file_name,
-    #                     'Data': chunk['Data']
-    #                 }
-    #                 self.send_to_chunkserver(cs_id, 'REQUEST', create_req)
-    #                 chunk_success = True
-    #             except Exception as e:
-    #                 print(f"Error sending chunk to chunkserver {cs_id}: {e}")
-            
-    #         if not chunk_success:
-    #             success = False
-    #             break
-
-    #     response = {
-    #         'Status': 'SUCCESS' if success else 'FAILED',
-    #         'Message': f"File '{file_name}' {'created successfully' if success else 'creation failed'}"
-    #     }
-    #     self.message_manager.send_message(conn, 'RESPONSE', response)
     def handle_create(self, conn, file_name, data):
         """Handle CREATE operation directly with chunkservers."""
         print("DEBUG: Received CREATE operation request for file:", file_name)
@@ -295,6 +243,7 @@ class MasterServer:
         chunks = []
 
         # Create chunks and select chunkservers
+        self.next_Chunk_Number = 1  # TODO: test once it may be wrong
         for i in range(num_chunks):
             Chunk_Number = self.next_Chunk_Number
             self.next_Chunk_Number += 1
@@ -324,44 +273,29 @@ class MasterServer:
         # Send chunks to chunkservers
         success = True
         for chunk in chunks:
-            chunk_success = False
+            chunk_success = True  # Assume success unless proven otherwise
             primary_server = chunk['Primary_Server']
-            print(f"DEBUG: Sending Chunk ID {chunk['Chunk_Number']} to primary server {primary_server}")
+            servers = chunk['Servers']
 
-            # Attempt to send data to the primary server
-            try:
-                create_req = {
-                    'Operation': 'CREATE',
-                    'Chunk_Number': chunk['Chunk_Number'],
-                    'File_Name': file_name,
-                    'Data': chunk['Data'],
-                    'Primary': True  # Indicate it's the primary server
-                }
-                self.send_to_chunkserver(primary_server, 'REQUEST', create_req)
-                chunk_success = True
-            except Exception as e:
-                print(f"ERROR: Failed to send Chunk ID {chunk['Chunk_Number']} to primary server {primary_server}: {e}")
-            
-            # If primary fails, attempt to send data to other servers
-            if not chunk_success:
-                for cs_id in chunk['Servers'][1:]:
-                    try:
-                        print(f"DEBUG: Sending Chunk ID {chunk['Chunk_Number']} to replica server {cs_id}")
-                        create_req = {
-                            'Operation': 'CREATE',
-                            'Chunk_Number': chunk['Chunk_Number'],
-                            'File_Name': file_name,
-                            'Data': chunk['Data'],
-                            'Primary': False  # Indicate it's a replica server
-                        }
-                        self.send_to_chunkserver(cs_id, 'REQUEST', create_req)
-                        chunk_success = True
-                        break
-                    except Exception as e:
-                        print(f"ERROR: Failed to send Chunk ID {chunk['Chunk_Number']} to replica server {cs_id}: {e}")
+            for index, cs_id in enumerate(servers):
+                is_primary = (cs_id == primary_server)
+                try:
+                    print(f"DEBUG: Sending Chunk ID {chunk['Chunk_Number']} to {'primary' if is_primary else 'replica'} server {cs_id}")
+                    create_req = {
+                        'Operation': 'CREATE',
+                        'Chunk_Number': chunk['Chunk_Number'],
+                        'File_Name': file_name,
+                        'Data': chunk['Data'],
+                        'Primary': is_primary  # Indicate if it's the primary server
+                    }
+                    self.send_to_chunkserver(cs_id, 'REQUEST', create_req)
+                except Exception as e:
+                    print(f"ERROR: Failed to send Chunk ID {chunk['Chunk_Number']} to server {cs_id}: {e}")
+                    if is_primary:  # If primary fails, consider the operation unsuccessful
+                        chunk_success = False
 
             if not chunk_success:
-                print(f"ERROR: Failed to send Chunk ID {chunk['Chunk_Number']} to any server.")
+                print(f"ERROR: Failed to successfully send Chunk ID {chunk['Chunk_Number']} to its primary server.")
                 success = False
                 break
 
@@ -373,40 +307,41 @@ class MasterServer:
         self.message_manager.send_message(conn, 'RESPONSE', response)
 
 
+
     def handle_delete(self, conn, file_name):
         """Handle DELETE operation directly with chunkservers."""
-        with self.lock:
-            Chunk_Numbers = self.file_chunks.get(file_name, [])
-            if not Chunk_Numbers:
-                response = {'Status': 'FAILED', 'Error': 'File not found'}
-                self.message_manager.send_message(conn, 'RESPONSE', response)
-                return
+        # with self.lock:
+        Chunk_Numbers = self.file_chunks.get(file_name, [])
+        if not Chunk_Numbers:
+            response = {'Status': 'FAILED', 'Error': 'File not found'}
+            self.message_manager.send_message(conn, 'RESPONSE', response)
+            return
+        
+        success = True
+        # Delete chunks from chunkservers
+        for Chunk_Number in Chunk_Numbers:
+            servers = self.chunk_locations.get(Chunk_Number, [])
+            chunk_success = False
             
-            success = True
-            # Delete chunks from chunkservers
-            for Chunk_Number in Chunk_Numbers:
-                servers = self.chunk_locations.get(Chunk_Number, [])
-                chunk_success = False
-                
-                for cs_id in servers:
-                    try:
-                        delete_req = {
-                            'Operation': 'DELETE',
-                            'Chunk_Number': Chunk_Number,
-                            'File_Name': file_name
-                        }
-                        self.send_to_chunkserver(cs_id, 'REQUEST', delete_req)
-                        chunk_success = True
-                    except Exception as e:
-                        print(f"Error deleting chunk from chunkserver {cs_id}: {e}")
-                
-                if chunk_success:
-                    del self.chunk_locations[Chunk_Number]
-                else:
-                    success = False
+            for cs_id in servers:
+                try:
+                    delete_req = {
+                        'Operation': 'DELETE',
+                        'Chunk_Number': Chunk_Number,
+                        'File_Name': file_name
+                    }
+                    self.send_to_chunkserver(cs_id, 'REQUEST', delete_req)
+                    chunk_success = True
+                except Exception as e:
+                    print(f"Error deleting chunk from chunkserver {cs_id}: {e}")
             
-            if success:
-                del self.file_chunks[file_name]
+            if chunk_success:
+                del self.chunk_locations[Chunk_Number]
+            else:
+                success = False
+        
+        if success:
+            del self.file_chunks[file_name]
 
         response = {
             'Status': 'SUCCESS' if success else 'FAILED',

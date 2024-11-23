@@ -14,3 +14,12 @@
 - Completed once append for chunkserver
 
 
+
+### BUGs 🐛
+-  
+
+
+| CREATE          | Description           | Status   |
+|------------------|-----------------------|----------|
+| CREATE    | when we create next chunk_no is not start with 1 it start with what left| Resolved |
+| Overall  | when chunks reguister they are not sending data properly means i was unable to delete the data present from earlier session | Pending  |

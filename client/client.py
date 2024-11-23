@@ -38,6 +38,7 @@ class Client:
         """
         master_socket = self.connect_to_master()
         if not master_socket:
+            print("[ERROR] Failed to connect to master server.")
             return None
 
         # Prepare request data based on operation
@@ -45,91 +46,141 @@ class Client:
             'Operation': operation,
             'File_Name': file_name
         }
-        
         if operation in ['CREATE', 'APPEND'] and data_length is not None:
             request_data['Data_Length'] = data_length
         elif operation == 'READ':
             request_data['Start_Byte'] = start_byte
             request_data['End_Byte'] = end_byte
-        
-        # Send request to master
+
         self.message_manager.send_message(master_socket, 'REQUEST', request_data)
+
         response_type, response_data = self.message_manager.receive_message(master_socket)
         master_socket.close()
-        
+
         if response_type == 'RESPONSE' and response_data['Status'] == 'SUCCESS':
+            print(f"[DEBUG] Master server responded successfully: {response_data}")
             return response_data
         else:
-            print(f"Master server response: {response_data.get('Error', 'Unknown error')}")
+            error_message = response_data.get('Error', 'Unknown error')
+            print(f"[ERROR] Master server response: {error_message}")
             return None
-    
-    def fetch_data_from_chunkserver(self, server, operation, file_name, chunk_id, start_byte, end_byte):
+
+    def fetch_data_from_chunkserver(self, server, operation, file_name, chunk_Number, start_byte, end_byte):
         """Fetch data from a chunkserver for READ operation."""
         try:
             chunkserver_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             chunkserver_socket.connect(tuple(server))  # server is a tuple (host, port)
-            
+
             request_data = {
                 'Operation': operation,
                 'File_Name': file_name,
-                'Chunk_ID': chunk_id,
-                'Start_Byte': start_byte,
-                'End_Byte': end_byte
+                'Chunk_Number': chunk_Number,
+                'Start': start_byte,
+                'End': end_byte
             }
             self.message_manager.send_message(chunkserver_socket, 'REQUEST', request_data)
+
             response_type, response_data = self.message_manager.receive_message(chunkserver_socket)
             chunkserver_socket.close()
             
+
             if response_type == 'RESPONSE' and response_data['Status'] == 'SUCCESS':
                 return response_data['Data'].encode('latin1')  # Decode back to bytes
             else:
-                print(f"READ on chunk {chunk_id} failed on {server}: {response_data.get('Error', 'Unknown error')}")
+                error_message = response_data.get('Error', 'Unknown error')
+                print(f"[ERROR] READ failed on chunk {chunk_Number} from server {server}: {error_message}")
                 return None
-        
+
         except ConnectionError:
-            print(f"Failed to connect to chunkserver {server} for READ operation.")
+            print(f"[ERROR] Failed to connect to chunkserver {server} for READ operation.")
             return None
-          
+
+    # def perform_read(self, file_name, start_byte, end_byte):
+    #     """Handle the READ operation."""
+    #     response = self.get_chunk_locations('READ', file_name, start_byte=start_byte, end_byte=end_byte)
+    #     if not response:
+    #         print("[ERROR] READ operation failed. Unable to retrieve chunk locations.")
+    #         return
+
+    #     chunks = response.get('Chunks', [])
+    #     read_data = bytearray()
+    #     read_queue = Queue()
+
+    #     # Add chunk info to the queue
+    #     for chunk_info in chunks:
+    #         chunk_Number = chunk_info['Chunk_Number']
+    #         assigned_servers = chunk_info['Chunkservers']
+    #         print(f"[DEBUG] Queueing chunk {chunk_Number} with replicas: {assigned_servers}")
+    #         read_queue.put((chunk_Number, assigned_servers))
+
+    #     # Worker function to read from chunkservers
+    #     def read_worker():
+    #         while not read_queue.empty():
+    #             chunk_Number, servers = read_queue.get()
+    #             print(f"[DEBUG] Processing chunk {chunk_Number}")
+    #             for server in servers:
+    #                 print(f"[DEBUG] Attempting to fetch chunk {chunk_Number} from server {server}")
+    #                 data = self.fetch_data_from_chunkserver(server, 'READ', file_name, chunk_Number, start_byte, end_byte)
+    #                 if data is not None:
+    #                     read_data.extend(data)
+    #                     print(f"[DEBUG] Successfully fetched data for chunk {chunk_Number}")
+    #                     break
+    #                 else:
+    #                     print(f"[WARNING] Failed to read chunk {chunk_Number} from server {server}. Trying next replica...")
+    #             read_queue.task_done()
+
+    #     # Start worker threads
+    #     num_threads = min(5, len(chunks))  # Limit number of threads
+    #     print(f"[DEBUG] Starting {num_threads} worker threads for READ operation.")
+    #     threads = []
+    #     for _ in range(num_threads):
+    #         thread = threading.Thread(target=read_worker)
+    #         thread.start()
+    #         threads.append(thread)
+
+    #     for thread in threads:
+    #         thread.join()
+
+    #     print(f"[DEBUG] READ operation for '{file_name}' completed. Data retrieved:")
+    #     print(read_data.decode(errors='ignore'))
+
     def perform_read(self, file_name, start_byte, end_byte):
-        """Handle the READ operation."""
+        """Handle the READ operation sequentially by contacting chunkservers."""
+        
+        # Get chunk locations from the master server
         response = self.get_chunk_locations('READ', file_name, start_byte=start_byte, end_byte=end_byte)
         if not response:
-            print("READ operation failed.")
-            return
+            print("[ERROR] READ operation failed. Unable to retrieve chunk locations.")
+            return 
         
         chunks = response.get('Chunks', [])
         read_data = bytearray()
-        read_queue = Queue()
-        
-        # Fetch data from all relevant chunks
+
+        # Process each chunk sequentially
         for chunk_info in chunks:
-            chunk_id = chunk_info['Chunk_ID']
+            chunk_Number = chunk_info['Chunk_Number']
             assigned_servers = chunk_info['Chunkservers']
-            read_queue.put((chunk_id, assigned_servers))
-        
-        # Worker function to read from chunkservers
-        def read_worker():
-            while not read_queue.empty():
-                chunk_id, servers = read_queue.get()
-                for server in servers:
-                    data = self.fetch_data_from_chunkserver(server, 'READ', file_name, chunk_id, start_byte, end_byte)
-                    if data is not None:
-                        read_data.extend(data)
-                        break
-                    else:
-                        print(f"Failed to read chunk {chunk_id} from server {server}. Trying next replica...")
-                read_queue.task_done()
-        
-        # Start worker threads
-        num_threads = min(5, len(chunks))  # Limit number of threads
-        for _ in range(num_threads):
-            threading.Thread(target=read_worker).start()
-        
-        read_queue.join()
-        
-        print(f"READ operation for '{file_name}' completed. Data:")
-        print(read_data.decode(errors='ignore'))
-    
+
+            chunk_fetched = False  # Flag to track successful fetch
+            for server in assigned_servers:
+                data = self.fetch_data_from_chunkserver(server, 'READ', file_name, chunk_Number, start_byte, end_byte)
+                if data is not None:
+                    read_data.extend(data)
+                    chunk_fetched = True
+                    break  # Exit the loop once data is successfully fetched
+                else:
+                    print(f"[WARNING] Failed to read chunk {chunk_Number} from server {server}. Trying next replica...")
+
+            if not chunk_fetched:
+                print(f"[ERROR] Unable to fetch chunk {chunk_Number} from all replicas.")
+
+        # Display the final data retrieved
+        if read_data:
+            print(f"READ operation for '{file_name}' completed. Data retrieved:")
+            print(read_data.decode(errors='ignore'))
+        else:
+            print(f"[ERROR] READ operation for '{file_name}' failed. No data could be retrieved.")
+
     def perform_create(self, file_name, data):
         """Handle the CREATE operation."""
         master_socket = self.connect_to_master()

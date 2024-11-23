@@ -6,7 +6,7 @@ import message
 import time
 import threading
 import uuid
-
+RETRY_CONNECT_TO_MASTER_TIME = 8
 class ChunkServer:
     def __init__(self, port, directory):
         self.chunkserver_id = 0
@@ -21,7 +21,7 @@ class ChunkServer:
         self.is_connected = False
         
     def connect_to_master(self):
-        retry_time = 8
+        # retry_time = 8
         while not self.is_connected:
             try:
                 self.master_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -30,11 +30,11 @@ class ChunkServer:
                 print("Connected to master server")
                 return True
             except ConnectionRefusedError:
-                print(f"Failed to connect to master server. Retrying in {retry_time} seconds...")
-                time.sleep(retry_time)
+                print(f"Failed to connect to master server. Retrying in {RETRY_CONNECT_TO_MASTER_TIME} seconds...")
+                time.sleep(RETRY_CONNECT_TO_MASTER_TIME)
             except Exception as e:
-                print(f"Unexpected error connecting to master: {e}. Retrying in {retry_time} seconds...")
-                time.sleep(retry_time)
+                print(f"Unexpected error connecting to master: {e}. Retrying in {RETRY_CONNECT_TO_MASTER_TIME} seconds...")
+                time.sleep(RETRY_CONNECT_TO_MASTER_TIME)
                 
     def reconnect_to_master(self):
         print("Attempting to reconnect to master server...")
@@ -58,9 +58,9 @@ class ChunkServer:
                 self.message_manager.send_message(self.master_socket, 'HEARTBEAT', {'Operation': 'HEARTBEAT'})
                 print("Sending heartbeat")
             except:
-                print("Error sending heartbeat. Attempting reconnection in 20 seconds...")
+                print(f"Error sending heartbeat. Attempting reconnection in {RETRY_CONNECT_TO_MASTER_TIME} seconds...")
                 self.is_connected = False
-                time.sleep(20)
+                time.sleep(RETRY_CONNECT_TO_MASTER_TIME)
                 if self.reconnect_to_master():
                     # Re-register with master after reconnection
                     try:
@@ -207,6 +207,7 @@ class ChunkServer:
                 else:
                     print("Unknown request type from master")
                     print("Request: ",request_type," DATA:",request_data)
+                    break
             except Exception as e:
                 print(f"Error handling master command: {e}")
                 break
