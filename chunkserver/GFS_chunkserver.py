@@ -24,6 +24,7 @@ class ChunkServer:
         while True:
             try:
                 self.message_manager.send_message(self.master_socket, 'HEARTBEAT', {'Operation': 'HEARTBEAT'})
+                print("Sending heartbeat")
             except:
                 print("Error sending heartbeat")
             finally:
@@ -152,6 +153,7 @@ class ChunkServer:
                         print("Received heartbeat ACK from master")
                 else:
                     print("Unknown request type from master")
+                    print("Request: ",request_type," DATA:",request_data)
             except Exception as e:
                 print(f"Error handling master command: {e}")
                 break
@@ -176,7 +178,7 @@ class ChunkServer:
         # Connect to the master on port 5000
         self.master_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            self.master_socket.connect(('localhost', 5000))
+            self.master_socket.connect(('localhost', 5010))
         except ConnectionRefusedError:
             print("Failed to connect to master server")
             return

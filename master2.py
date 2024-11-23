@@ -6,6 +6,7 @@ import math
 import uuid
 import sys
 import os
+import queue
 
 # Ensure config is in the Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -15,17 +16,17 @@ class MasterServer:
     def __init__(self, host='localhost', port=MASTER_SERVER_PORT):
         self.host = host
         self.port = port
-        self.chunkservers = {}  # key: chunkserver_id, value: {'socket': socket, 'last_heartbeat': timestamp, 'address': (host, port)}
+        self.chunkservers = {}  # key: chunkserver_id, value: {'connection': conn, 'last_heartbeat': timestamp, 'address': (host, port), 'message_queue': Queue}
         self.chunk_locations = {}  # key: chunk_id, value: list of chunkserver_ids
         self.file_chunks = {}  # key: file_name, value: list of chunk_ids
         self.next_chunk_id = 1
-        self.replicas = NO_OF_REPLICAS  # Number of replicas per chunk
+        self.replicas = NO_OF_REPLICAS
         self.message_manager = message.Message_Manager()
-        self.lock = threading.Lock()  # To synchronize access to shared resources
-        self.append_transactions = {}  # Track append transactions
+        self.lock = threading.Lock()
+        self.append_transactions = {}
 
     def start(self):
-        """Start the master server to listen for chunkservers and client requests."""
+        """Start the master server to listen for connections."""
         master_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         master_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         master_socket.bind((self.host, self.port))
@@ -37,40 +38,39 @@ class MasterServer:
         while True:
             try:
                 client_socket, addr = master_socket.accept()
-                threading.Thread(target=self.handle_connection, args=(client_socket,), daemon=True).start()
+                threading.Thread(target=self.handle_initial_connection, args=(client_socket,), daemon=True).start()
             except Exception as e:
                 print(f"Error accepting connection: {e}")
 
-    def handle_connection(self, conn):
-        """Handle incoming connections from chunkservers or clients."""
+    def handle_initial_connection(self, conn):
+        """Handle initial connection and determine if it's a chunkserver or client."""
         try:
             request_type, request_data = self.message_manager.receive_message(conn)
             
             if request_type == 'REGISTER':
                 self.register_chunkserver(conn, request_data)
-            elif request_type == 'REQUEST':
-                self.handle_client_request(conn, request_data)
-            elif request_type == 'CHUNK_DIRECTORY':
-                self.update_chunk_directory(request_data)
-            elif request_type == 'HEARTBEAT':
-                self.handle_heartbeat(conn, request_data)
             else:
-                print(f"Unknown request type: {request_type}")
+                # Handle client request and close connection afterward
+                self.handle_client_request(conn, request_data)
+                conn.close()
         except Exception as e:
-            print(f"Error handling connection: {e}")
-        finally:
+            print(f"Error handling initial connection: {e}")
             conn.close()
 
     def register_chunkserver(self, conn, data):
-        """Register a new chunkserver."""
+        """Register a new chunkserver and start its message handling thread."""
         with self.lock:
             chunkserver_id = len(self.chunkservers) + 1
-            chunkserver_address = data.get('Address')  # Expecting tuple [host, port]
+            chunkserver_address = tuple(data.get('Address'))
+            
+            # Create message queue for this chunkserver
+            message_queue = queue.Queue()
             
             self.chunkservers[chunkserver_id] = {
-                'socket': conn,
+                'connection': conn,
                 'last_heartbeat': time.time(),
-                'address': tuple(chunkserver_address)
+                'address': chunkserver_address,
+                'message_queue': message_queue
             }
         
         print(f"Registered chunkserver {chunkserver_id} at {chunkserver_address}")
@@ -78,27 +78,96 @@ class MasterServer:
         # Send acknowledgment with chunkserver ID
         response = {'Status': 'SUCCESS', 'Chunkserver_ID': chunkserver_id}
         self.message_manager.send_message(conn, 'RESPONSE', response)
-
-    def update_chunk_directory(self, data):
-        """Update chunk directory from chunkserver."""
-        chunk_directory = data.get('Chunk_Directory', {})
-        with self.lock:
-            for chunk_id, chunk_info in chunk_directory.items():
-                # Update chunk locations
-                self.chunk_locations[chunk_id] = chunk_info.get('Servers', [])
-        print("Chunk directory updated from chunkserver")
-
-    def handle_heartbeat(self, conn, data):
-        """Handle heartbeat from chunkservers."""
-        # Simply update the last heartbeat time
-        with self.lock:
-            for cs_id, cs_info in self.chunkservers.items():
-                if cs_info['socket'] == conn:
-                    cs_info['last_heartbeat'] = time.time()
-                    break
         
-        # Send heartbeat acknowledgment
-        self.message_manager.send_message(conn, 'HEARTBEAT_ACK', {'Status': 'OK'})
+        # Start dedicated threads for this chunkserver
+        threading.Thread(target=self.handle_chunkserver_messages, 
+                       args=(chunkserver_id, conn), 
+                       daemon=True).start()
+        threading.Thread(target=self.process_chunkserver_queue, 
+                       args=(chunkserver_id,), 
+                       daemon=True).start()
+
+    def handle_chunkserver_messages(self, chunkserver_id, conn):
+        """Continuously handle messages from a specific chunkserver."""
+        while True:
+            try:
+                request_type, request_data = self.message_manager.receive_message(conn)
+                print("Received message from Chunkserver ",chunkserver_id)
+                if request_type == 'HEARTBEAT':
+                    print("Heartbeat")
+                    self.handle_heartbeat(chunkserver_id)
+                elif request_type == 'CHUNK_DIRECTORY':
+                    self.update_chunk_directory(request_data)
+                elif request_type == 'RESPONSE':
+                    self.handle_chunkserver_response(chunkserver_id, request_data)
+                else:
+                    print(f"Unknown message type from chunkserver {chunkserver_id}: {request_type}")
+                
+            except Exception as e:
+                print(f"Error handling messages from chunkserver {chunkserver_id}: {e}")
+                self.handle_chunkserver_failure(chunkserver_id)
+                break
+
+    def handle_chunkserver_response(self, chunkserver_id, response_data):
+        """Handle responses from chunkservers for operations."""
+        transaction_id = response_data.get('Transaction_ID')
+        if not transaction_id:
+            return
+
+        with self.lock:
+            if transaction_id in self.append_transactions:
+                transaction = self.append_transactions[transaction_id]
+                
+                if response_data.get('Operation') == 'PREPARE':
+                    if 'Prepare_Responses' not in transaction:
+                        transaction['Prepare_Responses'] = []
+                    transaction['Prepare_Responses'].append(response_data)
+                
+                elif response_data.get('Operation') == 'COMMIT':
+                    if 'Commit_Responses' not in transaction:
+                        transaction['Commit_Responses'] = []
+                    transaction['Commit_Responses'].append(response_data)
+
+    def process_chunkserver_queue(self, chunkserver_id):
+        """Process messages in the chunkserver's queue."""
+        while True:
+            try:
+                with self.lock:
+                    if chunkserver_id not in self.chunkservers:
+                        break
+                    chunkserver = self.chunkservers[chunkserver_id]
+                
+                message = chunkserver['message_queue'].get()
+                try:
+                    self.message_manager.send_message(chunkserver['connection'], 
+                                                    message['type'], 
+                                                    message['data'])
+                except Exception as e:
+                    print(f"Error sending message to chunkserver {chunkserver_id}: {e}")
+                    self.handle_chunkserver_failure(chunkserver_id)
+                    break
+                
+            except queue.Empty:
+                time.sleep(0.1)
+            except Exception as e:
+                print(f"Error processing queue for chunkserver {chunkserver_id}: {e}")
+                break
+
+    def send_to_chunkserver(self, chunkserver_id, message_type, message_data):
+        """Queue a message to be sent to a chunkserver."""
+        with self.lock:
+            if chunkserver_id in self.chunkservers:
+                self.chunkservers[chunkserver_id]['message_queue'].put({
+                    'type': message_type,
+                    'data': message_data
+                })
+
+    def handle_heartbeat(self, chunkserver_id):
+        """Update heartbeat timestamp for a chunkserver."""
+        if chunkserver_id in self.chunkservers:
+                self.chunkservers[chunkserver_id]['last_heartbeat'] = time.time()
+                self.send_to_chunkserver(chunkserver_id, 'HEARTBEAT_ACK', {'Status': 'OK'})
+                print("Heartbeat from chunkserver",chunkserver_id)
 
     def heartbeat_monitor(self):
         """Monitor heartbeats from chunkservers to detect failures."""
@@ -113,13 +182,34 @@ class MasterServer:
                         to_remove.append(cs_id)
                 
                 for cs_id in to_remove:
-                    del self.chunkservers[cs_id]
-                    # Remove chunks associated with this chunkserver
-                    for chunk_id, servers in list(self.chunk_locations.items()):
-                        if cs_id in servers:
-                            servers.remove(cs_id)
-                            if not servers:
-                                del self.chunk_locations[chunk_id]
+                    self.handle_chunkserver_failure(cs_id)
+
+    def handle_chunkserver_failure(self, chunkserver_id):
+        """Handle chunkserver failure by cleaning up its resources."""
+        with self.lock:
+            if chunkserver_id in self.chunkservers:
+                try:
+                    self.chunkservers[chunkserver_id]['connection'].close()
+                except:
+                    pass
+                del self.chunkservers[chunkserver_id]
+                
+                # Remove chunks associated with this chunkserver
+                for chunk_id, servers in list(self.chunk_locations.items()):
+                    if chunkserver_id in servers:
+                        servers.remove(chunkserver_id)
+                        if not servers:
+                            del self.chunk_locations[chunk_id]
+                
+                print(f"Chunkserver {chunkserver_id} removed due to failure")
+
+    def update_chunk_directory(self, data):
+        """Update chunk directory from chunkserver."""
+        chunk_directory = data.get('Chunk_Directory', {})
+        with self.lock:
+            for chunk_id, chunk_info in chunk_directory.items():
+                self.chunk_locations[chunk_id] = chunk_info.get('Servers', [])
+        print("Chunk directory updated from chunkserver")
 
     def handle_client_request(self, conn, data):
         """Handle client operations: CREATE, DELETE, READ, APPEND."""
@@ -143,7 +233,7 @@ class MasterServer:
             self.message_manager.send_message(conn, 'RESPONSE', response)
 
     def handle_create(self, conn, file_name, data_length):
-        """Handle CREATE operation by splitting data into chunks and assigning replicas."""
+        """Handle CREATE operation."""
         num_chunks = max(1, math.ceil(data_length / CHUNK_SIZE))
         chunks = []
         
@@ -152,7 +242,6 @@ class MasterServer:
                 chunk_id = self.next_chunk_id
                 self.next_chunk_id += 1
                 
-                # Select chunkservers for replicas
                 selected_servers = self.select_chunkservers()
                 if not selected_servers:
                     response = {'Status': 'FAILED', 'Error': 'Insufficient chunkservers available'}
@@ -161,38 +250,30 @@ class MasterServer:
                 
                 self.chunk_locations[chunk_id] = selected_servers
                 chunks.append({
-                    'Chunk_ID': chunk_id, 
+                    'Chunk_ID': chunk_id,
                     'Chunkservers': [self.chunkservers[cs_id]['address'] for cs_id in selected_servers]
                 })
                 
-                # Assign chunk to file
+                # Send create request to selected chunkservers
+                for cs_id in selected_servers:
+                    create_req = {
+                        'Operation': 'CREATE',
+                        'Chunk_ID': chunk_id,
+                        'File_Name': file_name
+                    }
+                    self.send_to_chunkserver(cs_id, 'REQUEST', create_req)
+                
                 self.file_chunks.setdefault(file_name, []).append(chunk_id)
         
         response = {
-            'Status': 'SUCCESS', 
-            'Chunks': chunks, 
+            'Status': 'SUCCESS',
+            'Chunks': chunks,
             'Replicas': self.replicas
         }
         self.message_manager.send_message(conn, 'RESPONSE', response)
-        
-        # Send chunk creation request to chunkservers
-        for chunk in chunks:
-            for chunkserver_address in chunk['Chunkservers']:
-                try:
-                    cs_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    cs_socket.connect(chunkserver_address)
-                    create_req = {
-                        'Operation': 'CREATE',
-                        'Chunk_ID': chunk['Chunk_ID'],
-                        'File_Name': file_name
-                    }
-                    self.message_manager.send_message(cs_socket, 'REQUEST', create_req)
-                    cs_socket.close()
-                except Exception as e:
-                    print(f"Error creating chunk {chunk['Chunk_ID']} on {chunkserver_address}: {e}")
 
     def handle_delete(self, conn, file_name):
-        """Handle DELETE operation by removing all associated chunks."""
+        """Handle DELETE operation."""
         with self.lock:
             chunk_ids = self.file_chunks.get(file_name, [])
             if not chunk_ids:
@@ -204,34 +285,22 @@ class MasterServer:
             for chunk_id in chunk_ids:
                 servers = self.chunk_locations.get(chunk_id, [])
                 for cs_id in servers:
-                    cs_address = self.chunkservers[cs_id]['address']
-                    try:
-                        cs_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                        cs_socket.connect(cs_address)
-                        delete_req = {
-                            'Operation': 'DELETE',
-                            'Chunk_ID': chunk_id,
-                            'File_Name': file_name
-                        }
-                        self.message_manager.send_message(cs_socket, 'REQUEST', delete_req)
-                        cs_socket.close()
-                    except Exception as e:
-                        print(f"Error deleting chunk {chunk_id} on {cs_address}: {e}")
+                    delete_req = {
+                        'Operation': 'DELETE',
+                        'Chunk_ID': chunk_id,
+                        'File_Name': file_name
+                    }
+                    self.send_to_chunkserver(cs_id, 'REQUEST', delete_req)
                 
-                # Remove chunk locations
                 del self.chunk_locations[chunk_id]
             
-            # Remove file entry
             del self.file_chunks[file_name]
         
-        response = {
-            'Status': 'SUCCESS', 
-            'Message': f"File '{file_name}' deleted successfully."
-        }
+        response = {'Status': 'SUCCESS', 'Message': f"File '{file_name}' deleted successfully"}
         self.message_manager.send_message(conn, 'RESPONSE', response)
 
     def handle_read(self, conn, file_name, start_byte, end_byte):
-        """Handle READ operation by identifying relevant chunks."""
+        """Handle READ operation."""
         with self.lock:
             chunk_ids = self.file_chunks.get(file_name, [])
             if not chunk_ids:
@@ -246,8 +315,6 @@ class MasterServer:
                 return
             
             end_byte = min(end_byte, total_size - 1)
-            
-            # Determine which chunks cover the byte range
             start_chunk = start_byte // CHUNK_SIZE
             end_chunk = end_byte // CHUNK_SIZE
             relevant_chunks = chunk_ids[start_chunk:end_chunk + 1]
@@ -255,7 +322,7 @@ class MasterServer:
             chunks_info = []
             for chunk_id in relevant_chunks:
                 chunks_info.append({
-                    'Chunk_ID': chunk_id, 
+                    'Chunk_ID': chunk_id,
                     'Chunkservers': [self.chunkservers[cs_id]['address'] for cs_id in self.chunk_locations[chunk_id]]
                 })
         
@@ -359,70 +426,32 @@ class MasterServer:
         # Send response to client
         self.message_manager.send_message(conn, 'RESPONSE', response)
 
-    def send_prepare_to_chunkserver(self, chunkserver_address, transaction_id, chunk_id, data_length):
-        """Send PREPARE message to a specific chunkserver."""
-        try:
-            cs_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            cs_socket.connect(chunkserver_address)
-            
-            prepare_request = {
-                'Operation': 'PREPARE',
-                'Transaction_ID': transaction_id,
-                'Chunk_ID': chunk_id,
-                'Data_Length': data_length
-            }
-            self.message_manager.send_message(cs_socket, 'REQUEST', prepare_request)
-            response_type, response_data = self.message_manager.receive_message(cs_socket)
-            
-            with self.lock:
-                if transaction_id not in self.append_transactions:
-                    self.append_transactions[transaction_id] = {'Prepare_Responses': []}
-                self.append_transactions[transaction_id]['Prepare_Responses'].append(response_data)
-            
-            cs_socket.close()
-        except Exception as e:
-            print(f"Error in PREPARE phase for chunkserver {chunkserver_address}: {e}")
+    def send_prepare_to_chunkserver(self, chunkserver_id, transaction_id, chunk_id, data_length):
+        """Send PREPARE message to a specific chunkserver using persistent connection."""
+        prepare_request = {
+            'Operation': 'PREPARE',
+            'Transaction_ID': transaction_id,
+            'Chunk_ID': chunk_id,
+            'Data_Length': data_length
+        }
+        self.send_to_chunkserver(chunkserver_id, 'REQUEST', prepare_request)
 
-    def send_commit_to_chunkserver(self, chunkserver_address, transaction_id, chunk_id):
-        """Send COMMIT message to a specific chunkserver."""
-        try:
-            cs_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            cs_socket.connect(chunkserver_address)
-            
-            commit_request = {
-                'Operation': 'COMMIT',
-                'Transaction_ID': transaction_id,
-                'Chunk_ID': chunk_id
-            }
-            self.message_manager.send_message(cs_socket, 'REQUEST', commit_request)
-            response_type, response_data = self.message_manager.receive_message(cs_socket)
-            
-            with self.lock:
-                if transaction_id not in self.append_transactions:
-                    self.append_transactions[transaction_id] = {'Commit_Responses': []}
-                self.append_transactions[transaction_id]['Commit_Responses'].append(response_data)
-            
-            cs_socket.close()
-        except Exception as e:
-            print(f"Error in COMMIT phase for chunkserver {chunkserver_address}: {e}")
+    def send_commit_to_chunkserver(self, chunkserver_id, transaction_id, chunk_id):
+        """Send COMMIT message to a specific chunkserver using persistent connection."""
+        commit_request = {
+            'Operation': 'COMMIT',
+            'Transaction_ID': transaction_id,
+            'Chunk_ID': chunk_id
+        }
+        self.send_to_chunkserver(chunkserver_id, 'REQUEST', commit_request)
 
-    def send_abort_to_chunkserver(self, chunkserver_address, transaction_id):
-        """Send ABORT message to a specific chunkserver."""
-        try:
-            cs_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            cs_socket.connect(chunkserver_address)
-            
-            abort_request = {
-                'Operation': 'ABORT',
-                'Transaction_ID': transaction_id
-            }
-            self.message_manager.send_message(cs_socket, 'REQUEST', abort_request)
-            response_type, response_data = self.message_manager.receive_message(cs_socket)
-            
-            print(f"Abort response from {chunkserver_address}: {response_data}")
-            cs_socket.close()
-        except Exception as e:
-            print(f"Error in ABORT phase for chunkserver {chunkserver_address}: {e}")
+    def send_abort_to_chunkserver(self, chunkserver_id, transaction_id):
+        """Send ABORT message to a specific chunkserver using persistent connection."""
+        abort_request = {
+            'Operation': 'ABORT',
+            'Transaction_ID': transaction_id
+        }
+        self.send_to_chunkserver(chunkserver_id, 'REQUEST', abort_request)
 
     def abort_append_transaction(self, transaction_id):
         """Abort an ongoing append transaction."""
