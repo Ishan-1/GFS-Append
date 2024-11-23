@@ -18,17 +18,68 @@ class ChunkServer:
         self.directory = directory
         # Track ongoing append transactions
         self.append_transactions = {}
+        self.is_connected = False
         
+    def connect_to_master(self):
+        retry_time = 8
+        while not self.is_connected:
+            try:
+                self.master_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self.master_socket.connect(('localhost', 5010))
+                self.is_connected = True
+                print("Connected to master server")
+                return True
+            except ConnectionRefusedError:
+                print(f"Failed to connect to master server. Retrying in {retry_time} seconds...")
+                time.sleep(retry_time)
+            except Exception as e:
+                print(f"Unexpected error connecting to master: {e}. Retrying in {retry_time} seconds...")
+                time.sleep(retry_time)
+                
+    def reconnect_to_master(self):
+        print("Attempting to reconnect to master server...")
+        self.is_connected = False
+        if self.master_socket:
+            try:
+                self.master_socket.close()
+            except:
+                pass
+        return self.connect_to_master()
+
+
     def send_heartbeat(self):
         sleep_time = 5
         while True:
+            # if not self.is_connected:
+            #     time.sleep(sleep_time)
+            #     continue
+                
             try:
                 self.message_manager.send_message(self.master_socket, 'HEARTBEAT', {'Operation': 'HEARTBEAT'})
                 print("Sending heartbeat")
             except:
-                print("Error sending heartbeat")
+                print("Error sending heartbeat. Attempting reconnection in 20 seconds...")
+                self.is_connected = False
+                time.sleep(20)
+                if self.reconnect_to_master():
+                    # Re-register with master after reconnection
+                    try:
+                        self.message_manager.send_message(self.master_socket, 'REGISTER',
+                                                      {'Address':('localhost', self.port)})
+                        response, data = self.message_manager.receive_message(self.master_socket)
+                        if response == 'RESPONSE' and data['Status'] == 'SUCCESS':
+                            self.chunkserver_id = data['Chunkserver_ID']
+                            print(f"Re-registered with master as chunkserver {self.chunkserver_id}")
+                            # Resend chunk directory
+                            self.message_manager.send_message(self.master_socket, 'CHUNK_DIRECTORY',
+                                                          {'Chunk_Directory': self.chunk_directory.chunk_dict})
+                            print("Resent chunk directory to master")
+                    except Exception as e:
+                        print(f"Error re-registering with master: {e}")
+                        self.is_connected = False
             finally:
                 time.sleep(sleep_time)
+
 
     def handle_read(self, client_socket, request_data):
         file_name = request_data['File_Name']
@@ -176,13 +227,12 @@ class ChunkServer:
                 # Add the chunk to the chunk directory
                 self.chunk_directory.add_chunk(chunk_id, '', 0, data)
         os.chdir('..')
+        
+        
     def start_chunkserver(self):
-        # Connect to the master on port 5000
-        self.master_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            self.master_socket.connect(('localhost', 5010))
-        except ConnectionRefusedError:
-            print("Failed to connect to master server")
+        # Initial connection to master with retry
+        if not self.connect_to_master():
+            print("Failed to establish initial connection to master")
             return
 
         # Register with the master
@@ -203,6 +253,7 @@ class ChunkServer:
             self.message_manager.send_message(self.master_socket, 'CHUNK_DIRECTORY',
                                               {'Chunk_Directory': self.chunk_directory.chunk_dict})
             print("Sent chunk directory to master")           
+            
             # Create threads for various operations
             heartbeat_thread = threading.Thread(target=self.send_heartbeat)
             lease_thread = threading.Thread(target=self.update_leases)
@@ -231,7 +282,6 @@ class ChunkServer:
             print("Registration with master failed")
             self.master_socket.close()
             return
-
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
