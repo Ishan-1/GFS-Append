@@ -22,8 +22,8 @@ class Chunk:
         return True
     
     def delete(self):
-        os.remove(self.chunk_filename)
-        return not os.path.exists(self.chunk_filename)
+        os.remove(self.file_name)
+        return not os.path.exists(self.file_name)
     
     def read(self,start,end):
         try:

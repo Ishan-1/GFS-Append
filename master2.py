@@ -17,9 +17,8 @@ class MasterServer:
         self.host = host
         self.port = port
         self.chunkservers = {}  # key: chunkserver_id, value: {'connection': conn, 'last_heartbeat': timestamp, 'address': (host, port), 'message_queue': Queue}
-        self.chunk_locations = {}  # key: Chunk_Number, value: list of chunkserver_ids
+        self.chunk_locations = {}  # key: chunk_id, value: list of chunkserver_ids
         self.file_chunks = {}  # key: file_name, value: list of Chunk_Numbers
-        self.next_Chunk_Number = 1
         self.replicas = NO_OF_REPLICAS
         self.message_manager = message.Message_Manager()
         self.lock = threading.Lock()
@@ -96,7 +95,7 @@ class MasterServer:
                     # print("Heartbeat")
                     self.handle_heartbeat(chunkserver_id)
                 elif request_type == 'CHUNK_DIRECTORY':
-                    self.update_chunk_directory(request_data)
+                    self.update_chunk_directory(request_data,chunkserver_id)
                 elif request_type == 'RESPONSE':
                     self.handle_chunkserver_response(chunkserver_id, request_data)
                 else:
@@ -206,14 +205,39 @@ class MasterServer:
                             del self.chunk_locations[Chunk_Number]
                 
                 print(f"Chunkserver {chunkserver_id} removed due to failure")
-
-    def update_chunk_directory(self, data):
+                
+                
+    def update_chunk_directory(self, data, chunkserver_id):
         """Update chunk directory from chunkserver."""
         chunk_directory = data.get('Chunk_Directory', {})
+        
         with self.lock:
-            for Chunk_Number, chunk_info in chunk_directory.items():
-                self.chunk_locations[Chunk_Number] = chunk_info.get('Servers', [])
-        print("Chunk directory updated from chunkserver")
+            for chunk_id, chunk_info in chunk_directory.items():
+                # Parse chunk info
+                version = chunk_info.get('Version', 1)
+                primary = chunk_info.get('Primary', False)
+                
+                # Extract file_name from chunk_id
+                file_name = chunk_id.rsplit('_', 1)[0]
+                chunk_number = chunk_id.rsplit('_', 1)[1]
+                
+                # Generate new chunk_id with next available chunk number
+                new_chunk_id = self.generate_chunk_id(file_name,chunk_number)
+                
+                # Update file_chunks
+                if file_name not in self.file_chunks:
+                    self.file_chunks[file_name] = [new_chunk_id]
+                else:
+                    self.file_chunks[file_name].append(new_chunk_id)
+                
+                # Update chunk_locations
+                if new_chunk_id not in self.chunk_locations:
+                    self.chunk_locations[new_chunk_id] = [chunkserver_id]
+                elif chunkserver_id not in self.chunk_locations[new_chunk_id]:
+                    self.chunk_locations[new_chunk_id].append(chunkserver_id)
+                
+                print(f"[DEBUG] Updated chunk directory: file={file_name}, chunk_id={new_chunk_id}, server={chunkserver_id}")
+                
 
     def handle_client_request(self, conn, data):
         """Handle client operations: CREATE, DELETE, READ, APPEND."""
@@ -238,63 +262,74 @@ class MasterServer:
 
 
 
+    def generate_chunk_id(self, file_name, chunk_number):
+        """Generate a unique chunk ID combining file name and chunk number."""
+        return f"{file_name}_{chunk_number}"
+
+    def parse_chunk_id(self, chunk_id):
+        """Parse chunk ID to get file name and chunk number."""
+        file_name, chunk_number = chunk_id.rsplit('_', 1)
+        return file_name, int(chunk_number)
+
     def handle_create(self, conn, file_name, data):
         """Handle CREATE operation directly with chunkservers."""
         data_length = len(data)
         num_chunks = max(1, math.ceil(data_length / CHUNK_SIZE))
         
         chunks = []
-
-        # Create chunks and select chunkservers
-        self.next_Chunk_Number = 1  # TODO: test once it may be wrong
+        file_chunk_ids = []
+        next_chunk_number = 1
         for i in range(num_chunks):
-            Chunk_Number = self.next_Chunk_Number
-            self.next_Chunk_Number += 1
+            chunk_number = next_chunk_number
+            next_chunk_number += 1
+            chunk_id = self.generate_chunk_id(file_name, chunk_number)
 
             selected_servers = self.select_chunkservers()
             if not selected_servers:
                 response = {'Status': 'FAILED', 'Error': 'Insufficient chunkservers available'}
-                print("ERROR: No chunkservers available for Chunk ID:", Chunk_Number)
+                print(f"ERROR: No chunkservers available for Chunk ID: {chunk_id}")
                 self.message_manager.send_message(conn, 'RESPONSE', response)
                 return
 
             primary_server = selected_servers[0]
             chunk_data = data[i * CHUNK_SIZE: (i + 1) * CHUNK_SIZE]
-            self.chunk_locations[Chunk_Number] = selected_servers
+            self.chunk_locations[chunk_id] = selected_servers
             chunks.append({
-                'Chunk_Number': Chunk_Number,
+                'Chunk_ID': chunk_id,
                 'Primary_Server': primary_server,
                 'Servers': selected_servers,
                 'Data': chunk_data
             })
-            self.file_chunks.setdefault(file_name, []).append(Chunk_Number)
+            file_chunk_ids.append(chunk_id)
 
+        self.file_chunks[file_name] = file_chunk_ids
 
         # Send chunks to chunkservers
         success = True
         for chunk in chunks:
-            chunk_success = True  # Assume success unless proven otherwise
+            chunk_success = True
             primary_server = chunk['Primary_Server']
             servers = chunk['Servers']
 
-            for index, cs_id in enumerate(servers):
+            for cs_id in servers:
                 is_primary = (cs_id == primary_server)
                 try:
+                    chunk_number = self.parse_chunk_id(chunk['Chunk_ID'])[1]
                     create_req = {
                         'Operation': 'CREATE',
-                        'Chunk_Number': chunk['Chunk_Number'],
+                        'Chunk_Number': chunk_number,
                         'File_Name': file_name,
                         'Data': chunk['Data'],
-                        'Primary': is_primary  # Indicate if it's the primary server
+                        'Primary': is_primary
                     }
                     self.send_to_chunkserver(cs_id, 'REQUEST', create_req)
                 except Exception as e:
-                    print(f"ERROR: Failed to send Chunk ID {chunk['Chunk_Number']} to server {cs_id}: {e}")
-                    if is_primary:  # If primary fails, consider the operation unsuccessful
+                    print(f"ERROR: Failed to send Chunk ID {chunk['Chunk_ID']} to server {cs_id}: {e}")
+                    if is_primary:
                         chunk_success = False
 
             if not chunk_success:
-                print(f"ERROR: Failed to successfully send Chunk ID {chunk['Chunk_Number']} to its primary server.")
+                print(f"ERROR: Failed to successfully send Chunk ID {chunk['Chunk_ID']} to its primary server.")
                 success = False
                 break
 
@@ -304,28 +339,24 @@ class MasterServer:
         }
         self.message_manager.send_message(conn, 'RESPONSE', response)
 
-
-
     def handle_delete(self, conn, file_name):
         """Handle DELETE operation directly with chunkservers."""
-        # with self.lock:
-        Chunk_Numbers = self.file_chunks.get(file_name, [])
-        if not Chunk_Numbers:
+        chunk_ids = self.file_chunks.get(file_name, [])
+        if not chunk_ids:
             response = {'Status': 'FAILED', 'Error': 'File not found'}
             self.message_manager.send_message(conn, 'RESPONSE', response)
             return
         
         success = True
-        # Delete chunks from chunkservers
-        for Chunk_Number in Chunk_Numbers:
-            servers = self.chunk_locations.get(Chunk_Number, [])
+        for chunk_id in chunk_ids:
+            servers = self.chunk_locations.get(chunk_id, [])
             chunk_success = False
-            
             for cs_id in servers:
                 try:
+                    chunk_number = self.parse_chunk_id(chunk_id)[1]
                     delete_req = {
                         'Operation': 'DELETE',
-                        'Chunk_Number': Chunk_Number,
+                        'Chunk_Number': chunk_number,
                         'File_Name': file_name
                     }
                     self.send_to_chunkserver(cs_id, 'REQUEST', delete_req)
@@ -334,7 +365,7 @@ class MasterServer:
                     print(f"Error deleting chunk from chunkserver {cs_id}: {e}")
             
             if chunk_success:
-                del self.chunk_locations[Chunk_Number]
+                del self.chunk_locations[chunk_id]
             else:
                 success = False
         
@@ -347,17 +378,16 @@ class MasterServer:
         }
         self.message_manager.send_message(conn, 'RESPONSE', response)
 
-
     def handle_read(self, conn, file_name, start_byte, end_byte):
         """Handle READ operation."""
         with self.lock:
-            Chunk_Numbers = self.file_chunks.get(file_name, [])
-            if not Chunk_Numbers:
+            chunk_ids = self.file_chunks.get(file_name, [])
+            if not chunk_ids:
                 response = {'Status': 'FAILED', 'Error': 'File not found'}
                 self.message_manager.send_message(conn, 'RESPONSE', response)
                 return
             
-            total_size = len(Chunk_Numbers) * CHUNK_SIZE
+            total_size = len(chunk_ids) * CHUNK_SIZE
             if start_byte >= total_size:
                 response = {'Status': 'FAILED', 'Error': 'Start byte exceeds file size'}
                 self.message_manager.send_message(conn, 'RESPONSE', response)
@@ -366,94 +396,81 @@ class MasterServer:
             end_byte = min(end_byte, total_size - 1)
             start_chunk = start_byte // CHUNK_SIZE
             end_chunk = end_byte // CHUNK_SIZE
-            relevant_chunks = Chunk_Numbers[start_chunk:end_chunk + 1]
+            relevant_chunks = chunk_ids[start_chunk:end_chunk + 1]
             
             chunks_info = []
-            for Chunk_Number in relevant_chunks:
+            for chunk_id in relevant_chunks:
                 chunks_info.append({
-                    'Chunk_Number': Chunk_Number,
-                    'Chunkservers': [self.chunkservers[cs_id]['address'] for cs_id in self.chunk_locations[Chunk_Number]]
+                    'Chunk_ID': chunk_id,
+                    'Chunkservers': [self.chunkservers[cs_id]['address'] for cs_id in self.chunk_locations[chunk_id]]
                 })
         
         response = {'Status': 'SUCCESS', 'Chunks': chunks_info}
         self.message_manager.send_message(conn, 'RESPONSE', response)
 
-
-
     def handle_append(self, conn, file_name, data_length):
-        """Handle APPEND operation sequentially with debug statements."""
+        """Handle APPEND operation."""
         transaction_id = str(uuid.uuid4())
         print(f"[DEBUG] Starting APPEND operation for file: {file_name}, data_length: {data_length}")
 
-        # Allocate chunks and select chunkservers
         num_chunks = max(1, math.ceil(data_length / CHUNK_SIZE))
         chunks = []
-
+        next_chunk_number = max(self.parse_chunk_id(chunk_id)[1] for chunk_id in self.file_chunks.get(file_name, []))
         for _ in range(num_chunks):
             with self.lock:
-                Chunk_Number = self.next_Chunk_Number
-                self.next_Chunk_Number += 1
+                # Iterate through chunk numbers for the file to find the next available chunk number
+                chunk_number = next_chunk_number + 1
+                next_chunk_number += 1
+                chunk_id = self.generate_chunk_id(file_name, chunk_number)
 
-            # Select chunkservers for replicas
             selected_server_ids = self.select_chunkservers()
             if not selected_server_ids:
-                print(f"[ERROR] Insufficient chunkservers available for Chunk_Number: {Chunk_Number}")
+                print(f"[ERROR] Insufficient chunkservers available for Chunk ID: {chunk_id}")
                 response = {'Status': 'FAILED', 'Error': 'Insufficient chunkservers available'}
                 self.message_manager.send_message(conn, 'RESPONSE', response)
                 return
 
-            # Update chunk locations and store both IDs and addresses
-            self.chunk_locations[Chunk_Number] = selected_server_ids
+            self.chunk_locations[chunk_id] = selected_server_ids
             chunks.append({
-                'Chunk_Number': Chunk_Number,
+                'Chunk_ID': chunk_id,
                 'Chunkserver_IDs': selected_server_ids,
                 'Chunkservers': [self.chunkservers[cs_id]['address'] for cs_id in selected_server_ids]
             })
 
-        # Store transaction details
         self.append_transactions[transaction_id] = {
             'File_Name': file_name,
             'Chunks': chunks,
             'Status': 'PREPARE'
         }
 
-        # Prepare phase: check chunkserver readiness
-        print(f"[DEBUG] Starting prepare phase for transaction ID: {transaction_id}")
         prepare_responses = []
         for chunk in chunks:
-            for cs_id in chunk['Chunkserver_IDs']:  # Use server IDs instead of addresses
-                print(f"[DEBUG] Sending prepare request to chunkserver {cs_id} for Chunk_Number {chunk['Chunk_Number']}")
+            for cs_id in chunk['Chunkserver_IDs']:
                 response = self.send_prepare_to_chunkserver(
-                    cs_id, transaction_id, chunk['Chunk_Number'], data_length, file_name
+                    cs_id, transaction_id, chunk['Chunk_ID'], data_length, file_name
                 )
                 prepare_responses.append(response)
 
-        # Evaluate prepare phase results
         if all(resp.get('Status') == 'READY' for resp in prepare_responses):
-            # Commit phase
-            print(f"[DEBUG] Prepare phase successful. Starting commit phase for transaction ID: {transaction_id}")
             commit_responses = []
             for chunk in chunks:
-                for cs_id in chunk['Chunkserver_IDs']:  # Use server IDs instead of addresses
-                    print(f"[DEBUG] Sending commit request to chunkserver {cs_id} for Chunk_Number {chunk['Chunk_Number']}")
+                for cs_id in chunk['Chunkserver_IDs']:
                     response = self.send_commit_to_chunkserver(
-                        cs_id, transaction_id, chunk['Chunk_Number']
+                        cs_id, transaction_id, chunk['Chunk_ID']
                     )
                     commit_responses.append(response)
 
-            # Evaluate commit results
             if all(resp.get('Status') == 'SUCCESS' for resp in commit_responses):
-                # Update file chunks
                 with self.lock:
                     self.file_chunks.setdefault(file_name, []).extend(
-                        chunk['Chunk_Number'] for chunk in chunks
+                        chunk['Chunk_ID'] for chunk in chunks
                     )
                 
                 response = {
                     'Status': 'SUCCESS',
                     'Chunks': [{
-                        'Chunk_Number': chunk['Chunk_Number'],
-                        'Chunkservers': chunk['Chunkservers']  # Keep addresses in response to client
+                        'Chunk_ID': chunk['Chunk_ID'],
+                        'Chunkservers': chunk['Chunkservers']
                     } for chunk in chunks],
                     'Replicas': self.replicas,
                     'Transaction_ID': transaction_id
@@ -465,71 +482,45 @@ class MasterServer:
             self.abort_append_transaction(transaction_id)
             response = {'Status': 'FAILED', 'Error': 'Prepare phase failed'}
 
-        # Clean up transaction
         with self.lock:
             if transaction_id in self.append_transactions:
                 del self.append_transactions[transaction_id]
 
-        # Send response to client
         self.message_manager.send_message(conn, 'RESPONSE', response)
-        
-    def send_prepare_to_chunkserver(self, chunkserver_id, transaction_id, Chunk_Number, data_length,file_name):
-        """Send PREPARE message to a specific chunkserver using persistent connection."""
+
+    def send_prepare_to_chunkserver(self, chunkserver_id, transaction_id, chunk_id, data_length, file_name):
+        """Send PREPARE message to a specific chunkserver."""
+        chunk_number = self.parse_chunk_id(chunk_id)[1]
         prepare_request = {
             'Operation': 'PREPARE',
             'Transaction_ID': transaction_id,
-            'Chunk_Number': Chunk_Number,
+            'Chunk_Number': chunk_number,
             'Data_Length': data_length,
-            'File_Name':file_name  
+            'File_Name': file_name
         }
-        print(f"[DEBUG] Sending PREPARE to chunkserver {chunkserver_id} for Chunk_Number {Chunk_Number} with Transaction_ID {transaction_id} and Data_Length {data_length}")
         response = self.send_to_chunkserver(chunkserver_id, 'REQUEST', prepare_request)
-        print(f"[DEBUG] Received response from chunkserver {chunkserver_id} for PREPARE: {response}")
         return response
 
-    def send_commit_to_chunkserver(self, chunkserver_id, transaction_id, Chunk_Number):
-        """Send COMMIT message to a specific chunkserver using persistent connection."""
+    def send_commit_to_chunkserver(self, chunkserver_id, transaction_id, chunk_id):
+        """Send COMMIT message to a specific chunkserver."""
+        file_name, chunk_number = self.parse_chunk_id(chunk_id)
         commit_request = {
             'Operation': 'COMMIT',
             'Transaction_ID': transaction_id,
-            'Chunk_Number': Chunk_Number
+            'Chunk_Number': chunk_number,
+            'File_Name': file_name
         }
-        print(f"[DEBUG] Sending COMMIT to chunkserver {chunkserver_id} for Chunk_Number {Chunk_Number} with Transaction_ID {transaction_id}")
         response = self.send_to_chunkserver(chunkserver_id, 'REQUEST', commit_request)
-        print(f"[DEBUG] Received response from chunkserver {chunkserver_id} for COMMIT: {response}")
         return response
 
-
     def send_abort_to_chunkserver(self, chunkserver_id, transaction_id):
-        """Send ABORT message to a specific chunkserver using persistent connection."""
+        """Send ABORT message to a specific chunkserver."""
         abort_request = {
             'Operation': 'ABORT',
             'Transaction_ID': transaction_id
         }
-        print(f"[DEBUG] Sending ABORT to chunkserver {chunkserver_id} for Transaction_ID {transaction_id}")
         response = self.send_to_chunkserver(chunkserver_id, 'REQUEST', abort_request)
-        print(f"[DEBUG] Received response from chunkserver {chunkserver_id} for ABORT: {response}")
         return response
-
-
-    def abort_append_transaction(self, transaction_id):
-        """Abort an ongoing append transaction."""
-        with self.lock:
-            transaction = self.append_transactions.get(transaction_id, {})
-            if not transaction:
-                print(f"[DEBUG] No transaction found to abort for Transaction_ID {transaction_id}")
-                return
-
-            print(f"[DEBUG] Aborting transaction with Transaction_ID {transaction_id}")
-            for chunk in transaction['Chunks']:
-                for cs_id in chunk['Chunkserver_IDs']:  # Use server IDs instead of addresses
-                    print(f"[DEBUG] Sending ABORT to chunkserver {cs_id} for Transaction_ID {transaction_id}")
-                    self.send_abort_to_chunkserver(cs_id, transaction_id)
-
-            # Clean up transaction
-            del self.append_transactions[transaction_id]
-
-
     
     def select_chunkservers(self):
         """Select chunkservers for replicas using round-robin selection."""
