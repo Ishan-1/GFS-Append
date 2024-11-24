@@ -26,5 +26,6 @@
 | test  | test for more than 3 chunkservers  all 4 operations | Pending  |
 |   | Problem with self.next_Chunk_Number when we want to appent it its mayu be reset id we have done a create befoe it  | Pending  |
 |   | in loopp it comes in master  when we swith chunkserver off  Unknown message type from chunkserver 2: None | Pending  |
+|   | In some session if file is created and we try to read it in next session then error | Pending  |
 
 

@@ -160,7 +160,7 @@ class MasterServer:
                 'type': message_type,
                 'data': message_data
             })
-            print(f"[DEBUG] Message queued for chunkserver {chunkserver_id}.")
+            # print(f"[DEBUG] Message queued for chunkserver {chunkserver_id}.")
         else:
             print(f"[DEBUG] Chunkserver {chunkserver_id} not found. Cannot queue message.")
 
@@ -339,17 +339,25 @@ class MasterServer:
         }
         self.message_manager.send_message(conn, 'RESPONSE', response)
 
+    
     def handle_delete(self, conn, file_name):
         """Handle DELETE operation directly with chunkservers."""
+        # print(f"[DEBUG] Received DELETE request for file: {file_name}")
+        
         chunk_ids = self.file_chunks.get(file_name, [])
         if not chunk_ids:
+            # print(f"[DEBUG] File '{file_name}' not found in file_chunks.")
             response = {'Status': 'FAILED', 'Error': 'File not found'}
             self.message_manager.send_message(conn, 'RESPONSE', response)
             return
-        
+
+        # print(f"[DEBUG] Chunks associated with '{file_name}': {chunk_ids}")
         success = True
+        chunk_ids = list(set(chunk_ids))
         for chunk_id in chunk_ids:
             servers = self.chunk_locations.get(chunk_id, [])
+            # print(f"[DEBUG] Processing chunk '{chunk_id}' located on servers: {servers}")
+            
             chunk_success = False
             for cs_id in servers:
                 try:
@@ -359,24 +367,38 @@ class MasterServer:
                         'Chunk_Number': chunk_number,
                         'File_Name': file_name
                     }
+                    # print(f"[DEBUG] Sending DELETE request for chunk '{chunk_id}' to chunkserver '{cs_id}': {delete_req}")
                     self.send_to_chunkserver(cs_id, 'REQUEST', delete_req)
                     chunk_success = True
+                    # print(f"[DEBUG] Successfully deleted chunk '{chunk_id}' from chunkserver '{cs_id}'")
                 except Exception as e:
-                    print(f"Error deleting chunk from chunkserver {cs_id}: {e}")
+                    print(f"[ERROR] Error deleting chunk '{chunk_id}' from chunkserver '{cs_id}': {e}")
             
             if chunk_success:
+                # print(f"[DEBUG] Chunk '{chunk_id}' successfully deleted from all chunkservers.")
                 del self.chunk_locations[chunk_id]
             else:
+                print(f"[WARNING] Failed to delete chunk '{chunk_id}' from all chunkservers.")
                 success = False
-        
+
         if success:
+            # print(f"[DEBUG] Successfully deleted all chunks for file '{file_name}'. Cleaning up metadata.")
             del self.file_chunks[file_name]
+        else:
+            print(f"[WARNING] Failed to delete one or more chunks for file '{file_name}'.")
 
         response = {
             'Status': 'SUCCESS' if success else 'FAILED',
             'Message': f"File '{file_name}' {'deleted successfully' if success else 'deletion failed'}"
         }
+        # print(f"[DEBUG] Sending response to client: {response}")
         self.message_manager.send_message(conn, 'RESPONSE', response)
+
+    
+    
+    
+    
+    
 
     def handle_read(self, conn, file_name, start_byte, end_byte):
         """Handle READ operation."""
@@ -400,8 +422,9 @@ class MasterServer:
             
             chunks_info = []
             for chunk_id in relevant_chunks:
+                Chunk_Number = self.parse_chunk_id(chunk_id)[1]
                 chunks_info.append({
-                    'Chunk_ID': chunk_id,
+                    'Chunk_Number': Chunk_Number,
                     'Chunkservers': [self.chunkservers[cs_id]['address'] for cs_id in self.chunk_locations[chunk_id]]
                 })
         

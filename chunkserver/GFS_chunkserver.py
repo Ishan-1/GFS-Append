@@ -273,14 +273,66 @@ class ChunkServer:
                     elif operation == 'DELETE':
                         # Handle DELETE operation
                         print("[DEBUG] Handling DELETE operation.")
-                        chunk_id = f"{request_data['File_Name']}_{request_data['Chunk_Number']}"
-
-                        if self.chunk_directory.delete_chunk(chunk_id):
-                            response = {'Status': 'SUCCESS'}
+                        file_name = request_data['File_Name']
+                        chunk_number = request_data['Chunk_Number']
+                        base_chunk_id = f"{file_name}_{chunk_number}"
+                        
+                        # try:
+                        # Find all files matching the pattern file_name_chunk_number_*.chunk
+                        matching_files = []
+                        for file in os.listdir():
+                            # Split the filename into components
+                            if not file.endswith('.chunk'):
+                                continue
+                            
+                            file_base = file.rsplit('.', 1)[0]  # Remove .chunk extension
+                            file_components = file_base.split('_')
+                            
+                            # Check if this file matches our pattern
+                            if len(file_components) >= 2:
+                                file_prefix = '_'.join(file_components[:-1])  # Everything except version
+                                if file_prefix == base_chunk_id:
+                                    matching_files.append(file)
+                        
+                        if not matching_files:
+                            print(f"[DEBUG] No files found matching pattern {base_chunk_id}_*.chunk")
+                            response = {'Status': 'FAILED', 'Error': 'No matching chunks found'}
                         else:
-                            response = {'Status': 'FAILED', 'Error': 'Chunk not found'}
-                            print(f"[DEBUG] Failed to delete chunk {chunk_id}.")
+                            # Delete all matching files
+                            deletion_success = True
+                            failed_files = []
+                            
+                            for file in matching_files:
+                                try:
+                                    os.remove(file)
+                                    print(f"[DEBUG] Successfully deleted file: {file}")
+                                    
+                                    # Remove from chunk directory if present
+                                    chunk_id = file.rsplit('.', 1)[0]  # Remove .chunk extension
+                                    if chunk_id in self.chunk_directory.chunk_dict:
+                                        self.chunk_directory.delete_chunk(chunk_id)
+                                        print(f"[DEBUG] Removed {chunk_id} from chunk directory")
+                                except OSError as e:
+                                    print(f"[DEBUG] Failed to delete file {file}: {str(e)}")
+                                    deletion_success = False
+                                    failed_files.append(file)
+                            
+                            if deletion_success:
+                                response = {'Status': 'SUCCESS'}
+                            else:
+                                response = {
+                                    'Status': 'PARTIAL',
+                                    'Error': f'Failed to delete some files: {", ".join(failed_files)}'
+                                }
+                            
+                            print(f"[DEBUG] Deleted {len(matching_files) - len(failed_files)} out of {len(matching_files)} matching files")
+                        
+                        # except Exception as e:
+                        #     print(f"[DEBUG] Error during DELETE operation: {str(e)}")
+                        #     response = {'Status': 'FAILED', 'Error': f'Delete operation failed: {str(e)}'}
+                        
                         self.message_manager.send_message(self.master_socket, 'RESPONSE', response)
+
 
                 elif request_type == 'HEARTBEAT_ACK':
                     pass
