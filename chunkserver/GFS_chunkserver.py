@@ -56,7 +56,6 @@ class ChunkServer:
                 
             try:
                 self.message_manager.send_message(self.master_socket, 'HEARTBEAT', {'Operation': 'HEARTBEAT'})
-                print("Sending heartbeat")
             except:
                 print(f"Error sending heartbeat. Attempting reconnection in {RETRY_CONNECT_TO_MASTER_TIME} seconds...")
                 self.is_connected = False
@@ -72,7 +71,7 @@ class ChunkServer:
                             print(f"Re-registered with master as chunkserver {self.chunkserver_id}")
                             # Resend chunk directory
                             self.message_manager.send_message(self.master_socket, 'CHUNK_DIRECTORY',
-                                                          {'Chunk_Directory': self.chunk_directory.chunk_dict})
+                                                          {'Chunk_Directory': self.get_chunk_directory()})
                             print("Resent chunk directory to master")
                     except Exception as e:
                         print(f"Error re-registering with master: {e}")
@@ -309,14 +308,26 @@ class ChunkServer:
         for file in os.listdir():
             if file.endswith('.chunk'):
                 # Load the chunk file
-                chunk_id = int(file.split('.')[0])
-                with open(file, 'rb') as f:
+                print(f"Loading chunk file: {file.split('.')[0]}")
+                file_name, chunk_number, version = file.split('.')[0].split('_')
+                with open(file, 'r') as f:
                     data = f.read()
                 # Add the chunk to the chunk directory
-                self.chunk_directory.add_chunk(chunk_id, '', 0, data)
+                self.chunk_directory.load_chunk(file_name,int(chunk_number),int(version),data)
         os.chdir('..')
-        
-        
+    
+    # Get JSON serializable chunk directory
+    def get_chunk_directory(self):
+        chunk_dir={}
+        for chunk_id, chunk_data in self.chunk_directory.chunk_dict.items():
+            # Remove the chunk object
+            file_name,chunk_number=chunk_data['Chunk'].get_chunk_info().split(',')
+            chunk_data['File_Name']=file_name
+            chunk_data['Chunk_Number']=int(chunk_number)
+            chunk_dir[chunk_id] = chunk_data.copy()
+            chunk_dir[chunk_id].pop('Chunk')
+        return chunk_dir
+    
     def start_chunkserver(self):
         # Initial connection to master with retry
         if not self.connect_to_master():
@@ -340,7 +351,7 @@ class ChunkServer:
             os.chdir(self.directory)
             # Send the directory to the master
             self.message_manager.send_message(self.master_socket, 'CHUNK_DIRECTORY',
-                                              {'Chunk_Directory': self.chunk_directory.chunk_dict})
+                                              {'Chunk_Directory': self.get_chunk_directory()})
             print("Sent chunk directory to master")           
             
             # Create threads for various operations

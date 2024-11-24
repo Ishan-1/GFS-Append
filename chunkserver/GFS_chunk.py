@@ -5,8 +5,11 @@ class Chunk:
         self.version = version
         self.file_name = file_name
         self.chunk_number = chunk_number
+        self.data = data
+    
+    def write(self, data):
         # Construct chunk filename
-        self.chunk_filename = f"{file_name}_{chunk_number}_{version}"
+        self.chunk_filename = f"{self.file_name}_{self.chunk_number}_{self.version}.chunk"
         print(data)
         # Write data to chunk file if it doesn't exist
         if not os.path.exists(self.chunk_filename):
@@ -15,6 +18,8 @@ class Chunk:
                     f.write(data)
             except Exception as e:
                 print("Error creating chunk file:", e)
+                return False
+        return True
     
     def delete(self):
         os.remove(self.chunk_filename)
@@ -33,7 +38,7 @@ class Chunk:
             with open(self.chunk_filename, 'a') as f:
                 f.write(data)
             # Rename chunk file to reflect new version
-            new_filename = f"{self.file_name}_{self.chunk_number}_{self.version + 1}"
+            new_filename = f"{self.file_name}_{self.chunk_number}_{self.version + 1}.chunk"
             os.rename(self.chunk_filename, new_filename)
             self.chunk_filename = new_filename
             self.version += 1
@@ -41,5 +46,5 @@ class Chunk:
         except Exception as e:
             return f"Error appending to chunk file: {e}"
     
-    def get_chunk_id(self):
-        return self.chunk_id
+    def get_chunk_info(self):
+        return f'{self.file_name},{self.chunk_number}'
