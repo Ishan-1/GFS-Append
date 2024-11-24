@@ -232,7 +232,7 @@ class Client:
         """Handle the APPEND operation."""
         master_socket = self.connect_to_master()
         if not master_socket:
-            print("APPEND operation failed: Cannot connect to master server.")
+            print("[ERROR] APPEND operation failed: Cannot connect to master server.")
             return
 
         request_data = {
@@ -247,9 +247,12 @@ class Client:
         master_socket.close()
 
         if response_type == 'RESPONSE' and response_data['Status'] == 'SUCCESS':
+            print(f"[DEBUG] APPEND operation successful: {response_data}")
             print(f"Data appended to '{file_name}' successfully.")
         else:
-            print(f"APPEND operation failed: {response_data.get('Error', 'Unknown error')}")
+            error_message = response_data.get('Error', 'Unknown error')
+            print(f"[ERROR] APPEND operation failed: {error_message}")
+
             
             
     
