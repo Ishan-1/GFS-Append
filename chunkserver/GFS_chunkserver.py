@@ -135,106 +135,206 @@ class ChunkServer:
             client_handler.start()
 
 
+    # def handle_master_append_transaction(self, request_data):
+    #     """Handle a master append transaction."""
+    #     transaction_id = request_data['Transaction_ID']
+    #     operation = request_data['Operation']
+    #     chunk_id = f"{request_data['File_Name']}_{request_data['Chunk_Number']}"
+
+    #     print(f"[DEBUG] Received {operation} operation for Transaction_ID {transaction_id}, Chunk_ID {chunk_id}")
+    #     print(f"[DEBUG] Full request data: {request_data}")  # Add this line to see complete request data
+
+    #     try:
+    #         if operation == 'PREPARE':
+    #             print(f"[DEBUG] Handling PREPARE operation for Transaction_ID {transaction_id}")
+                
+    #             # Debug chunk directory state
+    #             print(f"[DEBUG] Current chunk directory state: {self.chunk_directory}")
+    #             print(f"[DEBUG] Looking up chunk: {chunk_id}")
+    #             # Verify chunk exists and is writable
+    #             # try:
+    #             #     chunk = self.chunk_directory.get_chunk(chunk_id)
+    #             #     print(f"[DEBUG] Retrieved chunk: {chunk}")
+    #             # except Exception as chunk_error:
+    #             #     print(f"[DEBUG] Error retrieving chunk: {str(chunk_error)}")
+    #             #     return {'Status': 'FAILED', 'Reason': f'Error accessing chunk: {str(chunk_error)}'}
+
+    #             # if chunk is None:
+    #             #     print(f"[DEBUG] PREPARE failed: Chunk {chunk_id} not found")
+    #             #     return {'Status': 'FAILED', 'Reason': 'Chunk not found'}
+
+    #             # # Validate chunk attributes
+    #             # if not hasattr(chunk, 'append'):
+    #             #     print(f"[DEBUG] PREPARE failed: Chunk {chunk_id} does not support append operation")
+    #             #     return {'Status': 'FAILED', 'Reason': 'Chunk does not support append operation'}
+
+    #             # Store transaction details
+    #             try:
+    #                 self.append_transactions[transaction_id] = {
+    #                     'Chunk_ID': chunk_id,
+    #                     'File_Name': request_data['File_Name'],
+    #                     'Data': request_data['Data'],
+    #                     'Status': 'PREPARED'
+    #                 }
+    #             except Exception as tx_error:
+    #                 print(f"[DEBUG] Error storing transaction: {str(tx_error)}")
+    #                 return {'Status': 'FAILED', 'Reason': f'Error storing transaction: {str(tx_error)}'}
+
+    #             print(f"[DEBUG] Transaction {transaction_id} prepared successfully for Chunk_ID {chunk_id}")
+    #             return {'Status': 'READY'}
+
+    #         # Rest of the code remains the same...
+    #         elif operation == 'COMMIT':
+    #             print(f"[DEBUG] Handling COMMIT operation for Transaction_ID {transaction_id}")
+                
+    #             # Verify transaction exists
+    #             if transaction_id not in self.append_transactions:
+    #                 print(f"[DEBUG] COMMIT failed: Unknown Transaction_ID {transaction_id}")
+    #                 return {'Status': 'FAILED', 'Reason': 'Unknown transaction'}
+
+    #             transaction = self.append_transactions[transaction_id]
+                
+    #             try:
+    #                 chunk = self.chunk_directory.get_chunk(transaction['Chunk_ID'])
+    #             except Exception as chunk_error:
+    #                 print(f"[DEBUG] Error retrieving chunk during COMMIT: {str(chunk_error)}")
+    #                 return {'Status': 'FAILED', 'Reason': f'Error accessing chunk: {str(chunk_error)}'}
+
+    #             if not chunk:
+    #                 print(f"[DEBUG] COMMIT failed: Chunk {transaction['Chunk_ID']} not found")
+    #                 return {'Status': 'FAILED', 'Reason': 'Chunk not found'}
+
+    #             # Append data to chunk
+    #             try:
+    #                 chunk.append(transaction['Data'])
+    #             except Exception as append_error:
+    #                 print(f"[DEBUG] Error appending data: {str(append_error)}")
+    #                 return {'Status': 'FAILED', 'Reason': f'Error appending data: {str(append_error)}'}
+
+    #             print(f"[DEBUG] Data appended to Chunk_ID {transaction['Chunk_ID']} for Transaction_ID {transaction_id}")
+
+    #             # Clean up transaction
+    #             del self.append_transactions[transaction_id]
+    #             print(f"[DEBUG] Transaction {transaction_id} committed and cleaned up successfully")
+    #             return {'Status': 'SUCCESS'}
+
+    #         elif operation == 'ABORT':
+    #             print(f"[DEBUG] Handling ABORT operation for Transaction_ID {transaction_id}")
+                
+    #             # Remove transaction if it exists
+    #             if transaction_id in self.append_transactions:
+    #                 del self.append_transactions[transaction_id]
+    #                 print(f"[DEBUG] Transaction {transaction_id} aborted successfully")
+    #             else:
+    #                 print(f"[DEBUG] No transaction found to abort for Transaction_ID {transaction_id}")
+    #             return {'Status': 'ABORTED'}
+
+    #     except Exception as e:
+    #         print(f"[DEBUG] Exception occurred while handling {operation} for Transaction_ID {transaction_id}")
+    #         print(f"[DEBUG] Exception type: {type(e)}")
+    #         print(f"[DEBUG] Exception details: {str(e)}")
+    #         print(f"[DEBUG] Stack trace:", exc_info=True)
+    #         return {'Status': 'FAILED', 'Reason': str(e)}
+
     def handle_master_append_transaction(self, request_data):
-        """Handle a master append transaction."""
+        """Handle a master append transaction with optimized chunk allocation."""
         transaction_id = request_data['Transaction_ID']
         operation = request_data['Operation']
-        chunk_id = f"{request_data['File_Name']}_{request_data['Chunk_Number']}"
+        file_name = request_data['File_Name']
+        chunk_number = request_data['Chunk_Number']
+        chunk_id = f"{file_name}_{chunk_number}"
+        is_primary = request_data.get('Primary', False)
 
         print(f"[DEBUG] Received {operation} operation for Transaction_ID {transaction_id}, Chunk_ID {chunk_id}")
-        print(f"[DEBUG] Full request data: {request_data}")  # Add this line to see complete request data
+        print(f"[DEBUG] Full request data: {request_data}")
 
         try:
             if operation == 'PREPARE':
                 print(f"[DEBUG] Handling PREPARE operation for Transaction_ID {transaction_id}")
-                
-                # Debug chunk directory state
-                print(f"[DEBUG] Current chunk directory state: {self.chunk_directory}")
-                print(f"[DEBUG] Looking up chunk: {chunk_id}")
-                # Verify chunk exists and is writable
-                # try:
-                #     chunk = self.chunk_directory.get_chunk(chunk_id)
-                #     print(f"[DEBUG] Retrieved chunk: {chunk}")
-                # except Exception as chunk_error:
-                #     print(f"[DEBUG] Error retrieving chunk: {str(chunk_error)}")
-                #     return {'Status': 'FAILED', 'Reason': f'Error accessing chunk: {str(chunk_error)}'}
+                data = request_data.get('Data', '')
+                data_length = request_data.get('Data_Length', 0)
 
-                # if chunk is None:
-                #     print(f"[DEBUG] PREPARE failed: Chunk {chunk_id} not found")
-                #     return {'Status': 'FAILED', 'Reason': 'Chunk not found'}
+                # If this is the primary chunkserver, check if data can fit in the last chunk
+                if is_primary:
+                    try:
+                        # Get the last chunk for this file
+                        last_chunk = self.chunk_directory.get_chunk(chunk_id)
+                        if last_chunk:
+                            remaining_space = last_chunk.get_remaining_space()
+                            print(f"[DEBUG] Last chunk {chunk_id} has {remaining_space} bytes remaining")
 
-                # # Validate chunk attributes
-                # if not hasattr(chunk, 'append'):
-                #     print(f"[DEBUG] PREPARE failed: Chunk {chunk_id} does not support append operation")
-                #     return {'Status': 'FAILED', 'Reason': 'Chunk does not support append operation'}
+                            if remaining_space > 0:
+                                if data_length <= remaining_space:
+                                    # All data can fit in the current chunk
+                                    return {
+                                        'Status': 'NO_NEW_CHUNK_NEEDED',
+                                        'Available_Space': remaining_space,
+                                        'Can_Fit_All': True
+                                    }
+                                else:
+                                    # Only partial data can fit
+                                    return {
+                                        'Status': 'PARTIAL_CHUNK_NEEDED',
+                                        'Available_Space': remaining_space,
+                                        'Can_Fit_All': False
+                                    }
+                    except Exception as chunk_error:
+                        print(f"[DEBUG] Error checking last chunk: {str(chunk_error)}")
 
-                # Store transaction details
-                try:
-                    self.append_transactions[transaction_id] = {
-                        'Chunk_ID': chunk_id,
-                        'File_Name': request_data['File_Name'],
-                        'Data': request_data['Data'],
-                        'Status': 'PREPARED'
-                    }
-                except Exception as tx_error:
-                    print(f"[DEBUG] Error storing transaction: {str(tx_error)}")
-                    return {'Status': 'FAILED', 'Reason': f'Error storing transaction: {str(tx_error)}'}
+                # Store transaction information for later commit
+                self.append_transactions[transaction_id] = {
+                    'Chunk_ID': chunk_id,
+                    'File_Name': file_name,
+                    'Data': data,
+                    'Status': 'PREPARED',
+                    'Is_Primary': is_primary
+                }
 
                 print(f"[DEBUG] Transaction {transaction_id} prepared successfully for Chunk_ID {chunk_id}")
                 return {'Status': 'READY'}
 
-            # Rest of the code remains the same...
             elif operation == 'COMMIT':
                 print(f"[DEBUG] Handling COMMIT operation for Transaction_ID {transaction_id}")
                 
-                # Verify transaction exists
                 if transaction_id not in self.append_transactions:
                     print(f"[DEBUG] COMMIT failed: Unknown Transaction_ID {transaction_id}")
                     return {'Status': 'FAILED', 'Reason': 'Unknown transaction'}
 
                 transaction = self.append_transactions[transaction_id]
-                
-                try:
-                    chunk = self.chunk_directory.get_chunk(transaction['Chunk_ID'])
-                except Exception as chunk_error:
-                    print(f"[DEBUG] Error retrieving chunk during COMMIT: {str(chunk_error)}")
-                    return {'Status': 'FAILED', 'Reason': f'Error accessing chunk: {str(chunk_error)}'}
+                chunk = self.chunk_directory.get_chunk(transaction['Chunk_ID'])
 
                 if not chunk:
-                    print(f"[DEBUG] COMMIT failed: Chunk {transaction['Chunk_ID']} not found")
-                    return {'Status': 'FAILED', 'Reason': 'Chunk not found'}
-
-                # Append data to chunk
-                try:
-                    chunk.append(transaction['Data'])
-                except Exception as append_error:
-                    print(f"[DEBUG] Error appending data: {str(append_error)}")
-                    return {'Status': 'FAILED', 'Reason': f'Error appending data: {str(append_error)}'}
+                    chunk = self.chunk_directory.add_chunk(
+                        transaction['File_Name'],
+                        chunk_number,
+                        transaction['Data'],
+                        transaction['Is_Primary']
+                    )
+                    if not chunk:
+                        return {'Status': 'FAILED', 'Reason': 'Could not create chunk'}
+                else:
+                    try:
+                        chunk.append(transaction['Data'])
+                    except Exception as append_error:
+                        print(f"[DEBUG] Error appending data: {str(append_error)}")
+                        return {'Status': 'FAILED', 'Reason': f'Error appending data: {str(append_error)}'}
 
                 print(f"[DEBUG] Data appended to Chunk_ID {transaction['Chunk_ID']} for Transaction_ID {transaction_id}")
-
-                # Clean up transaction
                 del self.append_transactions[transaction_id]
-                print(f"[DEBUG] Transaction {transaction_id} committed and cleaned up successfully")
                 return {'Status': 'SUCCESS'}
 
             elif operation == 'ABORT':
                 print(f"[DEBUG] Handling ABORT operation for Transaction_ID {transaction_id}")
-                
-                # Remove transaction if it exists
                 if transaction_id in self.append_transactions:
                     del self.append_transactions[transaction_id]
                     print(f"[DEBUG] Transaction {transaction_id} aborted successfully")
-                else:
-                    print(f"[DEBUG] No transaction found to abort for Transaction_ID {transaction_id}")
                 return {'Status': 'ABORTED'}
 
         except Exception as e:
             print(f"[DEBUG] Exception occurred while handling {operation} for Transaction_ID {transaction_id}")
-            print(f"[DEBUG] Exception type: {type(e)}")
             print(f"[DEBUG] Exception details: {str(e)}")
-            print(f"[DEBUG] Stack trace:", exc_info=True)
             return {'Status': 'FAILED', 'Reason': str(e)}
+
 
 
     def handle_master_commands(self):
