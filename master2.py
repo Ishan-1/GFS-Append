@@ -726,7 +726,7 @@ class MasterServer:
                     self.send_to_chunkserver(cs_id, 'REQUEST', {
                         'Operation': 'ABORT',
                         'Transaction_ID': transaction_id,
-                        'Chunk_Number': chunk_number,
+                        'Chunk_Number': chunk_numer,
                         'File_Name': file_name
                     })
 
