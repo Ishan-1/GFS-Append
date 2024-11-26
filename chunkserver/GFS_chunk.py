@@ -48,3 +48,13 @@ class Chunk:
     
     def get_chunk_info(self):
         return f'{self.file_name},{self.chunk_number}'
+    
+    def get_remaining_space(self):
+        # Read number of characters in chunk file
+        try:
+            chunk_filename = f"{self.file_name}_{self.chunk_number}_{self.version}.chunk"
+            with open(chunk_filename, 'r') as f:
+                space_used = len(f.read())
+                return 64 - space_used
+        except Exception as e:
+            return f"Error reading chunk file: {e}"

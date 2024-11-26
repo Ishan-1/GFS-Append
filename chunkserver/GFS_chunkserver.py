@@ -267,6 +267,8 @@ class ChunkServer:
                                 if data_length <= remaining_space:
                                     # All data can fit in the current chunk
                                     return {
+                                        'Operation': 'PREPARE',
+                                        'Transaction_ID': transaction_id,
                                         'Status': 'NO_NEW_CHUNK_NEEDED',
                                         'Available_Space': remaining_space,
                                         'Can_Fit_All': True
@@ -274,6 +276,8 @@ class ChunkServer:
                                 else:
                                     # Only partial data can fit
                                     return {
+                                        'Operation': 'PREPARE',
+                                        'Transaction_ID': transaction_id,
                                         'Status': 'PARTIAL_CHUNK_NEEDED',
                                         'Available_Space': remaining_space,
                                         'Can_Fit_All': False
@@ -314,21 +318,21 @@ class ChunkServer:
                         return {'Status': 'FAILED', 'Reason': 'Could not create chunk'}
                 else:
                     try:
-                        chunk.append(transaction['Data'])
+                        self.chunk_directory.append_chunk(transaction['Chunk_ID'], transaction['Data'])
                     except Exception as append_error:
                         print(f"[DEBUG] Error appending data: {str(append_error)}")
                         return {'Status': 'FAILED', 'Reason': f'Error appending data: {str(append_error)}'}
 
                 print(f"[DEBUG] Data appended to Chunk_ID {transaction['Chunk_ID']} for Transaction_ID {transaction_id}")
                 del self.append_transactions[transaction_id]
-                return {'Status': 'SUCCESS'}
+                return {'Operation':'COMMIT','Status': 'SUCCESS','Transaction_ID':transaction_id}
 
             elif operation == 'ABORT':
                 print(f"[DEBUG] Handling ABORT operation for Transaction_ID {transaction_id}")
                 if transaction_id in self.append_transactions:
                     del self.append_transactions[transaction_id]
                     print(f"[DEBUG] Transaction {transaction_id} aborted successfully")
-                return {'Status': 'ABORTED'}
+                return {'Operation':'ABORT','Status': 'ABORTED','Transaction_ID':transaction_id}
 
         except Exception as e:
             print(f"[DEBUG] Exception occurred while handling {operation} for Transaction_ID {transaction_id}")

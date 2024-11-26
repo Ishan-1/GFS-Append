@@ -19,7 +19,7 @@
 -  
 
 
-| tpoic          | Description           | Status   |
+| topic          | Description           | Status   |
 |------------------|-----------------------|----------|
 | CREATE    | when we create next chunk_no is not start with 1 it start with what left| Resolved |
 | Overall  | when chunks reguister they are not sending data properly means i was unable to delete the data present from earlier session | Pending  |
@@ -29,3 +29,4 @@
 |   | In some session if file is created and we try to read it in next session then error | Pending  |
 
 
+TODO: Implement lease
