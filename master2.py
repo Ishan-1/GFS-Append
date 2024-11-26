@@ -23,6 +23,7 @@ class MasterServer:
         self.message_manager = message.Message_Manager()
         self.lock = threading.Lock()
         self.append_transactions = {}
+        self.chunkserver_metadata = {}  # New attribute added here for storing metadata of failed chunkservers
 
     def start(self):
         """Start the master server to listen for connections."""
@@ -56,11 +57,50 @@ class MasterServer:
             print(f"Error handling initial connection: {e}")
             conn.close()
 
+    # def register_chunkserver(self, conn, data):
+    #     """Register a new chunkserver and start its message handling thread."""
+    #     with self.lock: 
+    #         chunkserver_id = len(self.chunkservers) + 1
+    #         chunkserver_address = tuple(data.get('Address'))
+            
+    #         # Create message queue for this chunkserver
+    #         message_queue = queue.Queue()
+            
+    #         self.chunkservers[chunkserver_id] = {
+    #             'connection': conn,
+    #             'last_heartbeat': time.time(),
+    #             'address': chunkserver_address,
+    #             'message_queue': message_queue
+    #         }
+        
+    #     print(f"Registered chunkserver {chunkserver_id} at {chunkserver_address}")
+        
+    #     # Send acknowledgment with chunkserver ID
+    #     response = {'Status': 'SUCCESS', 'Chunkserver_ID': chunkserver_id}
+    #     self.message_manager.send_message(conn, 'RESPONSE', response)
+        
+    #     # Start dedicated threads for this chunkserver
+    #     threading.Thread(target=self.handle_chunkserver_messages, 
+    #                    args=(chunkserver_id, conn), 
+    #                    daemon=True).start()
+    #     threading.Thread(target=self.process_chunkserver_queue, 
+    #                    args=(chunkserver_id,), 
+    #                    daemon=True).start()
+
+
     def register_chunkserver(self, conn, data):
-        """Register a new chunkserver and start its message handling thread."""
+        """Extended registration to handle potential chunkserver recovery."""
         with self.lock: 
             chunkserver_id = len(self.chunkservers) + 1
             chunkserver_address = tuple(data.get('Address'))
+            
+            # Check if this is a known chunkserver trying to recover
+            recovered_id = None
+            for stored_id, metadata in self.chunkserver_metadata.items():
+                if metadata['address'] == chunkserver_address:
+                    recovered_id = stored_id
+                    chunkserver_id = recovered_id
+                    break
             
             # Create message queue for this chunkserver
             message_queue = queue.Queue()
@@ -72,11 +112,19 @@ class MasterServer:
                 'message_queue': message_queue
             }
         
-        print(f"Registered chunkserver {chunkserver_id} at {chunkserver_address}")
+        print(f"{'Recovered' if recovered_id else 'Registered'} chunkserver {chunkserver_id} at {chunkserver_address}")
         
         # Send acknowledgment with chunkserver ID
-        response = {'Status': 'SUCCESS', 'Chunkserver_ID': chunkserver_id}
+        response = {
+            'Status': 'SUCCESS', 
+            'Chunkserver_ID': chunkserver_id,
+            'Is_Recovery': bool(recovered_id)
+        }
         self.message_manager.send_message(conn, 'RESPONSE', response)
+        
+        # If recovering, restore previous metadata
+        if recovered_id:
+            self.recover_chunkserver_metadata(chunkserver_id)
         
         # Start dedicated threads for this chunkserver
         threading.Thread(target=self.handle_chunkserver_messages, 
@@ -85,6 +133,9 @@ class MasterServer:
         threading.Thread(target=self.process_chunkserver_queue, 
                        args=(chunkserver_id,), 
                        daemon=True).start()
+
+        return chunkserver_id
+
 
     def handle_chunkserver_messages(self, chunkserver_id, conn):
         """Continuously handle messages from a specific chunkserver."""
@@ -188,13 +239,19 @@ class MasterServer:
                     self.handle_chunkserver_failure(cs_id)
 
     def handle_chunkserver_failure(self, chunkserver_id):
-        """Handle chunkserver failure by cleaning up its resources."""
+        """Handle chunkserver failure by cleaning up its resources and storing metadata."""
         with self.lock:
             if chunkserver_id in self.chunkservers:
+                    # Store metadata before deletion
+                self.store_chunkserver_metadata(chunkserver_id)
+                
+                # Close connection
                 try:
                     self.chunkservers[chunkserver_id]['connection'].close()
                 except:
                     pass
+            
+                # Remove from active chunkservers
                 del self.chunkservers[chunkserver_id]
                 
                 # Remove chunks associated with this chunkserver
@@ -204,8 +261,57 @@ class MasterServer:
                         if not servers:
                             del self.chunk_locations[Chunk_Number]
                 
-                print(f"Chunkserver {chunkserver_id} removed due to failure")
+                print(f"Chunkserver {chunkserver_id} removed due to failure. Metadata stored for recovery.")
+
+    def store_chunkserver_metadata(self, chunkserver_id):
+        """Store metadata for a failed chunkserver to aid in recovery."""
+        if chunkserver_id in self.chunkservers:
+            # Store the original address and chunks hosted on this chunkserver
+            chunkserver_info = self.chunkservers[chunkserver_id]
+            
+            # Collect chunks hosted on this chunkserver
+            hosted_chunks = []
+            for chunk_id, server_list in self.chunk_locations.items():
+                if chunkserver_id in server_list:
+                    hosted_chunks.append(chunk_id)
+            
+            # Store comprehensive metadata
+            self.chunkserver_metadata[chunkserver_id] = {
+                'address': chunkserver_info['address'],
+                'hosted_chunks': hosted_chunks,
+                'last_known_timestamp': time.time()
+            }
+    def recover_chunkserver_metadata(self, chunkserver_id):
+        """Restore metadata for a recovered chunkserver."""
+        with self.lock:
+            if chunkserver_id in self.chunkserver_metadata:
+                metadata = self.chunkserver_metadata[chunkserver_id]
                 
+                # Restore chunks to chunk_locations
+                for chunk_id in metadata['hosted_chunks']:
+                    if chunk_id in self.chunk_locations:
+                        if chunkserver_id not in self.chunk_locations[chunk_id]:
+                            self.chunk_locations[chunk_id].append(chunkserver_id)
+                    else:
+                        self.chunk_locations[chunk_id] = [chunkserver_id]
+                
+                # Derive file_chunks from restored chunk information
+                for chunk_id in metadata['hosted_chunks']:
+                    # Assuming chunk_id format is 'filename_chunkNumber'
+                    file_name = chunk_id.rsplit('_', 1)[0]
+                    if file_name not in self.file_chunks:
+                        self.file_chunks[file_name] = [chunk_id]
+                    elif chunk_id not in self.file_chunks[file_name]:
+                        self.file_chunks[file_name].append(chunk_id)
+                
+                print(f"Recovered metadata for Chunkserver {chunkserver_id}")
+                
+                # Optionally remove from stored metadata after recovery
+                del self.chunkserver_metadata[chunkserver_id]
+                return metadata['address']
+            
+            return None
+
                 
     def update_chunk_directory(self, data, chunkserver_id):
         """Update chunk directory from chunkserver."""
