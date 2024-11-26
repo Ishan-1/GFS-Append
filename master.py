@@ -57,37 +57,6 @@ class MasterServer:
             print(f"Error handling initial connection: {e}")
             conn.close()
 
-    # def register_chunkserver(self, conn, data):
-    #     """Register a new chunkserver and start its message handling thread."""
-    #     with self.lock: 
-    #         chunkserver_id = len(self.chunkservers) + 1
-    #         chunkserver_address = tuple(data.get('Address'))
-            
-    #         # Create message queue for this chunkserver
-    #         message_queue = queue.Queue()
-            
-    #         self.chunkservers[chunkserver_id] = {
-    #             'connection': conn,
-    #             'last_heartbeat': time.time(),
-    #             'address': chunkserver_address,
-    #             'message_queue': message_queue
-    #         }
-        
-    #     print(f"Registered chunkserver {chunkserver_id} at {chunkserver_address}")
-        
-    #     # Send acknowledgment with chunkserver ID
-    #     response = {'Status': 'SUCCESS', 'Chunkserver_ID': chunkserver_id}
-    #     self.message_manager.send_message(conn, 'RESPONSE', response)
-        
-    #     # Start dedicated threads for this chunkserver
-    #     threading.Thread(target=self.handle_chunkserver_messages, 
-    #                    args=(chunkserver_id, conn), 
-    #                    daemon=True).start()
-    #     threading.Thread(target=self.process_chunkserver_queue, 
-    #                    args=(chunkserver_id,), 
-    #                    daemon=True).start()
-
-
     def register_chunkserver(self, conn, data):
         """Extended registration to handle potential chunkserver recovery."""
         with self.lock: 
@@ -736,29 +705,6 @@ class MasterServer:
             selected = available_ids[:self.replicas]
         return selected
     
-    # def send_delete_to_chunkserver(self, server_address, file_name, Chunk_Number):
-    #     """Send a DELETE request to a specific chunkserver."""
-    #     try:
-    #         cs_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    #         cs_socket.connect(tuple(server_address))
-            
-    #         request_data = {
-    #             'Operation': 'DELETE',
-    #             'File_Name': file_name,
-    #             'Chunk_Number': Chunk_Number
-    #         }
-    #         self.message_manager.send_message(cs_socket, 'REQUEST', request_data)
-    #         response_type, response_data = self.message_manager.receive_message(cs_socket)
-    #         cs_socket.close()
-            
-    #         if response_type == 'RESPONSE' and response_data['Status'] == 'SUCCESS':
-    #             print(f"Chunk {Chunk_Number} deleted successfully on {server_address}.")
-    #         else:
-    #             print(f"Failed to delete chunk {Chunk_Number} on {server_address}: {response_data.get('Error', 'Unknown error')}")
-        
-    #     except ConnectionError:
-    #         print(f"Failed to connect to chunkserver {server_address} for DELETE operation.")
-
 # Entry point for the master server application
 if __name__ == "__main__":
     master_server = MasterServer()

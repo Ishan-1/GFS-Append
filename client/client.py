@@ -95,54 +95,6 @@ class Client:
             print(f"[ERROR] Failed to connect to chunkserver {server} for READ operation.")
             return None
 
-    # def perform_read(self, file_name, start_byte, end_byte):
-    #     """Handle the READ operation."""
-    #     response = self.get_chunk_locations('READ', file_name, start_byte=start_byte, end_byte=end_byte)
-    #     if not response:
-    #         print("[ERROR] READ operation failed. Unable to retrieve chunk locations.")
-    #         return
-
-    #     chunks = response.get('Chunks', [])
-    #     read_data = bytearray()
-    #     read_queue = Queue()
-
-    #     # Add chunk info to the queue
-    #     for chunk_info in chunks:
-    #         chunk_Number = chunk_info['Chunk_Number']
-    #         assigned_servers = chunk_info['Chunkservers']
-    #         print(f"[DEBUG] Queueing chunk {chunk_Number} with replicas: {assigned_servers}")
-    #         read_queue.put((chunk_Number, assigned_servers))
-
-    #     # Worker function to read from chunkservers
-    #     def read_worker():
-    #         while not read_queue.empty():
-    #             chunk_Number, servers = read_queue.get()
-    #             print(f"[DEBUG] Processing chunk {chunk_Number}")
-    #             for server in servers:
-    #                 print(f"[DEBUG] Attempting to fetch chunk {chunk_Number} from server {server}")
-    #                 data = self.fetch_data_from_chunkserver(server, 'READ', file_name, chunk_Number, start_byte, end_byte)
-    #                 if data is not None:
-    #                     read_data.extend(data)
-    #                     print(f"[DEBUG] Successfully fetched data for chunk {chunk_Number}")
-    #                     break
-    #                 else:
-    #                     print(f"[WARNING] Failed to read chunk {chunk_Number} from server {server}. Trying next replica...")
-    #             read_queue.task_done()
-
-    #     # Start worker threads
-    #     num_threads = min(5, len(chunks))  # Limit number of threads
-    #     print(f"[DEBUG] Starting {num_threads} worker threads for READ operation.")
-    #     threads = []
-    #     for _ in range(num_threads):
-    #         thread = threading.Thread(target=read_worker)
-    #         thread.start()
-    #         threads.append(thread)
-
-    #     for thread in threads:
-    #         thread.join()
-
-    #     print(f"[DEBUG] READ operation for '{file_name}' completed. Data retrieved:")
-    #     print(read_data.decode(errors='ignore'))
 
     def perform_read(self, file_name, start_byte, end_byte):
         """Handle the READ operation sequentially by contacting chunkservers."""
