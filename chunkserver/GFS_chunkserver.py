@@ -241,7 +241,7 @@ class ChunkServer:
         transaction_id = request_data['Transaction_ID']
         operation = request_data['Operation']
         file_name = request_data['File_Name']
-        chunk_number = request_data['Chunk_Number']
+        chunk_number = request_data['Chunk_Number'] 
         chunk_id = f"{file_name}_{chunk_number}"
         is_primary = request_data.get('Primary', False)
 
@@ -295,14 +295,14 @@ class ChunkServer:
                 }
 
                 print(f"[DEBUG] Transaction {transaction_id} prepared successfully for Chunk_ID {chunk_id}")
-                return {'Status': 'READY'}
+                return {'Operation':'PREPARE','Status': 'READY'}
 
             elif operation == 'COMMIT':
                 print(f"[DEBUG] Handling COMMIT operation for Transaction_ID {transaction_id}")
                 
                 if transaction_id not in self.append_transactions:
                     print(f"[DEBUG] COMMIT failed: Unknown Transaction_ID {transaction_id}")
-                    return {'Status': 'FAILED', 'Reason': 'Unknown transaction'}
+                    return {'Operation':'PREPARE','Status': 'FAILED', 'Reason': 'Unknown transaction'}
 
                 transaction = self.append_transactions[transaction_id]
                 chunk = self.chunk_directory.get_chunk(transaction['Chunk_ID'])
@@ -318,6 +318,7 @@ class ChunkServer:
                         return {'Status': 'FAILED', 'Reason': 'Could not create chunk'}
                 else:
                     try:
+                        print(transaction['Data'])
                         self.chunk_directory.append_chunk(transaction['Chunk_ID'], transaction['Data'])
                     except Exception as append_error:
                         print(f"[DEBUG] Error appending data: {str(append_error)}")
