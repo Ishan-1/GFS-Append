@@ -483,6 +483,7 @@ class MasterServer:
             chunk_ids = self.file_chunks.get(file_name, [])
             # chunk_ids = list(set(chunk_ids))
             chunk_ids = sorted(set(chunk_ids))
+            chunk_ids = sorted(chunk_ids, key=lambda x: int(x.split('_')[1]))
 
             if not chunk_ids:
                 response = {'Status': 'FAILED', 'Error': 'File not found'}
@@ -560,10 +561,14 @@ class MasterServer:
 
                 if time.time() - start_time > 10:  # Timeout
                     print(f"[DEBUG] PREPARE timed out for transaction: {transaction_id}")
-                    self.abort_append_transaction(transaction_id)
+                    self.send_to_chunkserver(primary_server_id,'REQUEST',{
+                      'Operation': 'ABORT',
+                      'Transaction_ID': transaction_id,
+                      'File_Name': file_name,
+                      'Chunk_Number': last_chunk_number,})
                     self.message_manager.send_message(conn, 'RESPONSE', {'Status': 'FAILED', 'Error': 'Timeout on PREPARE'})
                     return
-                time.sleep(0.1)
+                time.sleep(2)
 
             if response.get('Status') == 'NO_NEW_CHUNK_NEEDED':
                 available_space = response.get('Available_Space')
@@ -595,7 +600,12 @@ class MasterServer:
             selected_servers = self.select_chunkservers()
             if not selected_servers:
                 print(f"[DEBUG] Insufficient chunkservers for new chunk allocation.")
-                self.abort_append_transaction(transaction_id)
+                self.send_to_chunkserver(primary_server_id,transaction_id,{
+                  'Operation': 'ABORT',
+                  'Transaction_ID': transaction_id,
+                  'File_Name': file_name,
+                  'Chunk_Number': last_chunk_number,
+                  })
                 self.message_manager.send_message(conn, 'RESPONSE', {
                     'Status': 'FAILED', 'Error': 'Insufficient chunkservers'
                 })
@@ -632,7 +642,7 @@ class MasterServer:
                     'Primary': False,
                     'Data': chunk['Data']
                 })
-                time.sleep(0.1)
+                time.sleep(2)
                 print("Done")
             print(f"[DEBUG] PREPARE sent for chunk: {chunk['Chunk_ID']}")
 
@@ -641,7 +651,8 @@ class MasterServer:
         while True:
             with self.lock:
                 prepare_responses = self.append_transactions[transaction_id].get('Prepare_Responses', [])
-                if len(prepare_responses) >= len(chunks_to_write):
+                print(f"[DEBUG] Response of Prepare: {prepare_responses}");
+                if len(prepare_responses) >=(NO_OF_REPLICAS)*len(chunks_to_write):
                     print(f"[DEBUG] Received all PREPARE responses for transaction: {transaction_id}")
                     break
 
@@ -664,6 +675,10 @@ class MasterServer:
                 })
                 time.sleep(0.1)
             print(f"[DEBUG] COMMIT sent for chunk: {chunk['Chunk_ID']}")
+        with self.lock:
+            if file_name not in self.file_chunks:
+                self.file_chunks[file_name] = []
+            self.file_chunks[file_name].extend([chunk['Chunk_ID'] for chunk in chunks_to_write])
 
         # Step 6: Respond to client
         print(f"[DEBUG] APPEND operation successful for transaction: {transaction_id}")
@@ -673,12 +688,6 @@ class MasterServer:
 
 
     def abort_append_transaction(self, transaction_id):
-        """
-        Abort an append transaction by notifying all involved chunkservers and cleaning up the transaction state.
-
-        Args:
-            transaction_id (str): The unique ID of the transaction to abort.
-        """
         with self.lock:
             transaction = self.append_transactions.get(transaction_id)
 
@@ -692,21 +701,30 @@ class MasterServer:
 
             print(f"[DEBUG] Aborting transaction {transaction_id} for chunks: {chunks_to_abort}")
 
-            # Send ABORT messages to all involved chunkservers
+            # Remove uncommitted chunks
             for chunk_id in chunks_to_abort:
                 chunkserver_ids = self.chunk_locations.get(chunk_id, [])
-                file_name,chunk_number=self.parse_chunk_id(chunk['Chunk_ID'])
+                file_name, chunk_number = self.parse_chunk_id(chunk_id)
+                if file_name in self.file_chunks and chunk_id in self.file_chunks[file_name]:
+                    self.file_chunks[file_name].remove(chunk_id)
+                    print(f"[DEBUG] Removed chunk {chunk_id} from file_chunks for file: {file_name}")
+                if chunk_id in self.chunk_locations:
+                    del self.chunk_locations[chunk_id]
+                    print(f"[DEBUG] Removed chunk {chunk_id} from chunk_locations.")
+
+                # Notify chunkservers about abort
                 for cs_id in chunkserver_ids:
                     self.send_to_chunkserver(cs_id, 'REQUEST', {
                         'Operation': 'ABORT',
                         'Transaction_ID': transaction_id,
-                        'Chunk_Number': chunk_numer,
+                        'Chunk_Number': chunk_number,
                         'File_Name': file_name
                     })
 
             # Clean up transaction state
             del self.append_transactions[transaction_id]
             print(f"[DEBUG] Transaction {transaction_id} aborted and cleaned up.")
+
 
     
     def select_chunkservers(self):
