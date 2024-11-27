@@ -183,7 +183,7 @@ class MasterServer:
             })
             # print(f"[DEBUG] Message queued for chunkserver {chunkserver_id}.")
         else:
-            print(f"[DEBUG] Chunkserver {chunkserver_id} not found. Cannot queue message.")
+            print(f"[Error] Chunkserver {chunkserver_id} not found. Cannot queue message.")
 
 
     def handle_heartbeat(self, chunkserver_id):
@@ -312,7 +312,7 @@ class MasterServer:
                 elif chunkserver_id not in self.chunk_locations[new_chunk_id]:
                     self.chunk_locations[new_chunk_id].append(chunkserver_id)
                 
-                print(f"[DEBUG] Updated chunk directory: file={file_name}, chunk_id={new_chunk_id}, server={chunkserver_id}")
+                # print(f"[DEBUG] Updated chunk directory: file={file_name}, chunk_id={new_chunk_id}, server={chunkserver_id}")
                 
 
     def handle_client_request(self, conn, data):
@@ -500,8 +500,8 @@ class MasterServer:
             start_chunk = start_byte // CHUNK_SIZE
             end_chunk = end_byte // CHUNK_SIZE
             relevant_chunks = chunk_ids[start_chunk:end_chunk + 1]
-            print("[DEBUG] chunk_ids: " , chunk_ids)
-            print("[DEBUG] relevant_chunks: " , relevant_chunks)
+            # print("[DEBUG] chunk_ids: " , chunk_ids)
+            # print("[DEBUG] relevant_chunks: " , relevant_chunks)
             
             chunks_info = []
             for chunk_id in relevant_chunks:
@@ -532,7 +532,7 @@ class MasterServer:
             _, last_chunk_number = self.parse_chunk_id(last_chunk_id)
             next_chunk_number = last_chunk_number
 
-            print(f"[DEBUG] Last chunk found: {last_chunk_id}, primary server: {primary_server_id}")
+            # print(f"[DEBUG] Last chunk found: {last_chunk_id}, primary server: {primary_server_id}")
 
             # Send PREPARE to primary server
             self.send_to_chunkserver(primary_server_id, 'REQUEST', {
@@ -545,7 +545,7 @@ class MasterServer:
                 'Data': data_to_append
             })
 
-            print(f"[DEBUG] PREPARE request sent to primary server: {primary_server_id} for chunk: {last_chunk_id}")
+            # print(f"[DEBUG] PREPARE request sent to primary server: {primary_server_id} for chunk: {last_chunk_id}")
 
             # Wait for response from primary chunkserver
             start_time = time.time()
@@ -556,7 +556,7 @@ class MasterServer:
                         response = prepare_responses[0]  # Primary response
                         # Pop the response from the list
                         self.append_transactions[transaction_id]['Prepare_Responses'] = []
-                        print(f"[DEBUG] Received response from primary: {response}")
+                        # print(f"[DEBUG] Received response from primary: {response}")
                         break
 
                 if time.time() - start_time > 10:  # Timeout
@@ -579,7 +579,7 @@ class MasterServer:
                     'Data': data_to_append[:available_space]
                 })
                 remaining_data -= available_space
-                print(f"[DEBUG] Appending data to existing chunk: {last_chunk_id}, remaining data: {remaining_data}")
+                # print(f"[DEBUG] Appending data to existing chunk: {last_chunk_id}, remaining data: {remaining_data}")
             elif response.get('Status') == 'PARTIAL_CHUNK_NEEDED':
                 available_space = response.get('Available_Space')
                 chunks_to_write.append({
@@ -590,7 +590,7 @@ class MasterServer:
                 })
                 remaining_data-=available_space
                 next_chunk_number += 1
-                print(f"[DEBUG] Partial space used in chunk: {last_chunk_id}, remaining data: {remaining_data}")
+                # print(f"[DEBUG] Partial space used in chunk: {last_chunk_id}, remaining data: {remaining_data}")
         else:
             self.message_manager.send_message(conn, 'RESPONSE', {'Status': 'FAILED', 'Error': 'File not found'})
             return 
@@ -599,7 +599,7 @@ class MasterServer:
             chunk_data_length = min(remaining_data, CHUNK_SIZE)
             selected_servers = self.select_chunkservers()
             if not selected_servers:
-                print(f"[DEBUG] Insufficient chunkservers for new chunk allocation.")
+                # print(f"[DEBUG] Insufficient chunkservers for new chunk allocation.")
                 self.send_to_chunkserver(primary_server_id,transaction_id,{
                   'Operation': 'ABORT',
                   'Transaction_ID': transaction_id,
@@ -624,7 +624,7 @@ class MasterServer:
             remaining_data -= chunk_data_length
             next_chunk_number += 1
 
-            print(f"[DEBUG] New chunk allocated: {chunk_id}, servers: {selected_servers}, remaining data: {remaining_data}")
+            # print(f"[DEBUG] New chunk allocated: {chunk_id}, servers: {selected_servers}, remaining data: {remaining_data}")
         
         # Step 3: Send PREPARE to all chunkservers for new chunks
         for chunk in chunks_to_write:
@@ -644,14 +644,14 @@ class MasterServer:
                 })
                 time.sleep(2)
                 print("Done")
-            print(f"[DEBUG] PREPARE sent for chunk: {chunk['Chunk_ID']}")
+            # print(f"[DEBUG] PREPARE sent for chunk: {chunk['Chunk_ID']}")
 
         # Step 4: Wait for all PREPARE responses
         start_time = time.time()
         while True:
             with self.lock:
                 prepare_responses = self.append_transactions[transaction_id].get('Prepare_Responses', [])
-                print(f"[DEBUG] Response of Prepare: {prepare_responses}");
+                # print(f"[DEBUG] Response of Prepare: {prepare_responses}");
                 if len(prepare_responses) >=(NO_OF_REPLICAS)*len(chunks_to_write):
                     print(f"[DEBUG] Received all PREPARE responses for transaction: {transaction_id}")
                     break
@@ -674,7 +674,7 @@ class MasterServer:
                     'File_Name': file_name
                 })
                 time.sleep(0.1)
-            print(f"[DEBUG] COMMIT sent for chunk: {chunk['Chunk_ID']}")
+            # print(f"[DEBUG] COMMIT sent for chunk: {chunk['Chunk_ID']}")
         with self.lock:
             if file_name not in self.file_chunks:
                 self.file_chunks[file_name] = []
@@ -692,7 +692,7 @@ class MasterServer:
             transaction = self.append_transactions.get(transaction_id)
 
             if not transaction:
-                print(f"[DEBUG] No active transaction found for Transaction_ID {transaction_id}.")
+                print(f"[Error] No active transaction found for Transaction_ID {transaction_id}.")
                 return
 
             # Extract chunk information
@@ -707,10 +707,10 @@ class MasterServer:
                 file_name, chunk_number = self.parse_chunk_id(chunk_id)
                 if file_name in self.file_chunks and chunk_id in self.file_chunks[file_name]:
                     self.file_chunks[file_name].remove(chunk_id)
-                    print(f"[DEBUG] Removed chunk {chunk_id} from file_chunks for file: {file_name}")
+                    # print(f"[DEBUG] Removed chunk {chunk_id} from file_chunks for file: {file_name}")
                 if chunk_id in self.chunk_locations:
                     del self.chunk_locations[chunk_id]
-                    print(f"[DEBUG] Removed chunk {chunk_id} from chunk_locations.")
+                    # print(f"[DEBUG] Removed chunk {chunk_id} from chunk_locations.")
 
                 # Notify chunkservers about abort
                 for cs_id in chunkserver_ids:

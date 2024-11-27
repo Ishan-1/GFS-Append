@@ -281,7 +281,7 @@ class ChunkServer:
                         last_chunk = self.chunk_directory.get_chunk(chunk_id)
                         if last_chunk:
                             remaining_space = last_chunk.get_remaining_space()
-                            print(f"[DEBUG] Last chunk {chunk_id} has {remaining_space} bytes remaining")
+                            # print(f"[DEBUG] Last chunk {chunk_id} has {remaining_space} bytes remaining")
 
                             if remaining_space > 0:
                                 if data_length <= remaining_space:
@@ -303,7 +303,7 @@ class ChunkServer:
                                         'Can_Fit_All': False
                                     }
                     except Exception as chunk_error:
-                        print(f"[DEBUG] Error checking last chunk: {str(chunk_error)}")
+                        print(f"[Error] Error checking last chunk: {str(chunk_error)}")
                         return {'Status': 'FAILED', 'Reason': f'Error checking last chunk: {str(chunk_error)}','Transaction_ID': transaction_id,'Chunk_ID':chunk_id}
                 else:
                     # Store chunk preparation details
@@ -347,7 +347,7 @@ class ChunkServer:
                     return {'Operation': 'COMMIT', 'Status': 'SUCCESS', 'Chunk_ID': chunk_id,'Transaction_ID': transaction_id,'Chunk_ID':chunk_id}
 
                 except Exception as commit_error:
-                    print(f"[DEBUG] Error committing chunk {chunk_id}: {str(commit_error)}")
+                    print(f"[Error] Error committing chunk {chunk_id}: {str(commit_error)}")
                     return {'Status': 'FAILED', 'Reason': f'Error committing chunk {chunk_id}','Transaction_ID': transaction_id,'Chunk_ID':chunk_id}
 
             elif operation == 'ABORT':
@@ -366,7 +366,7 @@ class ChunkServer:
                 return {'Operation': 'ABORT', 'Status': 'ABORTED', 'Chunk_ID': chunk_id,'Transaction_ID': transaction_id,'Chunk_ID':chunk_id}
 
         except Exception as e:
-            print(f"[DEBUG] Exception in transaction {transaction_id}: {str(e)}")
+            print(f"[Error] Exception in transaction {transaction_id}: {str(e)}")
             return {'Status': 'FAILED', 'Reason': str(e),'Transaction_ID': transaction_id,'Chunk_ID':chunk_id}
 
 
@@ -384,7 +384,7 @@ class ChunkServer:
                     if operation in ['PREPARE', 'COMMIT', 'ABORT']:
                         # Handle append transaction commands
                         response = self.handle_master_append_transaction(request_data)
-                        print(f"[DEBUG] Response for {operation} operation: {response}")
+                        # print(f"[DEBUG] Response for {operation} operation: {response}")
                         self.message_manager.send_message(self.master_socket, 'RESPONSE', response)
 
                     elif operation == 'CREATE':
@@ -428,7 +428,7 @@ class ChunkServer:
                                     matching_files.append(file)
                         
                         if not matching_files:
-                            print(f"[DEBUG] No files found matching pattern {base_chunk_id}_*.chunk")
+                            print(f"[Error] No files found matching pattern {base_chunk_id}_*.chunk")
                             response = {'Status': 'FAILED', 'Error': 'No matching chunks found'}
                         else:
                             # Delete all matching files
@@ -444,9 +444,9 @@ class ChunkServer:
                                     chunk_id = file.rsplit('.', 1)[0]  # Remove .chunk extension
                                     if chunk_id in self.chunk_directory.chunk_dict:
                                         self.chunk_directory.delete_chunk(chunk_id)
-                                        print(f"[DEBUG] Removed {chunk_id} from chunk directory")
+                                        # print(f"[DEBUG] Removed {chunk_id} from chunk directory")
                                 except OSError as e:
-                                    print(f"[DEBUG] Failed to delete file {file}: {str(e)}")
+                                    print(f"[Error] Failed to delete file {file}: {str(e)}")
                                     deletion_success = False
                                     failed_files.append(file)
                             
@@ -479,7 +479,7 @@ class ChunkServer:
 
             except Exception as e:
                 # Log exceptions and exit loop
-                print(f"[DEBUG] Error handling master command: {e}")
+                print(f"[Error] Error handling master command: {e}")
                 break
 
     

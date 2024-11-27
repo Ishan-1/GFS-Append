@@ -197,7 +197,7 @@ class Client:
         self.message_manager.send_message(master_socket, 'REQUEST', request_data)
         response_type, response_data = self.message_manager.receive_message(master_socket)
         master_socket.close()
-        print(f"[DEBUG] response_data: ", response_data)
+        # print(f"[DEBUG] response_data: ", response_data)
         if response_type == 'RESPONSE' and response_data['Status'] == 'SUCCESS':
             # print(f"[DEBUG] APPEND operation successful: {response_data}")
             print(f"Data appended to '{file_name}' successfully.")
