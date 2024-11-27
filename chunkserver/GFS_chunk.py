@@ -10,7 +10,6 @@ class Chunk:
         
     
     def write(self, data):
-        print(data)
         # Write data to chunk file if it doesn't exist
         if not os.path.exists(self.chunk_filename):
             try:
@@ -37,7 +36,6 @@ class Chunk:
         try:
             with open(self.chunk_filename, 'a') as f:
                 f.write(data)
-            print("Appending data ",data)
             # Rename chunk file to reflect new version
             new_filename = f"{self.file_name}_{self.chunk_number}_{self.version + 1}.chunk"
             os.rename(self.chunk_filename, new_filename)

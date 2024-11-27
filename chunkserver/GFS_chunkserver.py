@@ -272,7 +272,7 @@ class ChunkServer:
 
                 # Check if this chunk is already being prepared
                 if chunk_id in transaction['pending_chunks'] or chunk_id in transaction['committed_chunks']:
-                    return {'Operation': 'PREPARE', 'Status': 'ALREADY_PREPARED'}
+                    return {'Operation': 'PREPARE', 'Status': 'ALREADY_PREPARED','Transaction_ID': transaction_id}
 
                 # If primary, check chunk allocation requirements
                 if is_primary:
@@ -304,21 +304,24 @@ class ChunkServer:
                                     }
                     except Exception as chunk_error:
                         print(f"[DEBUG] Error checking last chunk: {str(chunk_error)}")
-
-                # Store chunk preparation details
-                transaction['pending_chunks'].append(chunk_id)
-                transaction['prepared_chunks'][chunk_id] = {
-                    'data': data,
-                    'chunk_number': chunk_number,
-                    'is_primary': is_primary
-                }
-
-                return {'Operation': 'PREPARE', 'Status': 'READY'}
+                        return {'Status': 'FAILED', 'Reason': f'Error checking last chunk: {str(chunk_error)}','Transaction_ID': transaction_id}
+                else:
+                    # Store chunk preparation details
+                    transaction['pending_chunks'].append(chunk_id)
+                    transaction['prepared_chunks'][chunk_id] = {
+                        'Chunk_ID': chunk_id,
+                        'File_Name': file_name,
+                        'Data': data,
+                        'Status': 'PREPARED',
+                        'Is_Primary': is_primary
+                    }
+                    self.append_transactions[transaction_id] = transaction
+                    return {'Operation': 'PREPARE', 'Status': 'READY','Transaction_ID': transaction_id}
 
             elif operation == 'COMMIT':
                 # Verify this specific chunk is pending
                 if chunk_id not in transaction['pending_chunks']:
-                    return {'Operation': 'COMMIT', 'Status': 'FAILED', 'Reason': 'Chunk not prepared'}
+                    return {'Operation': 'COMMIT', 'Status': 'FAILED', 'Reason': 'Chunk not prepared','Transaction_ID': transaction_id}
 
                 # Attempt to commit the specific chunk
                 try:
@@ -329,23 +332,23 @@ class ChunkServer:
                         chunk = self.chunk_directory.add_chunk(
                             file_name,
                             chunk_number,
-                            chunk_info['data'],
-                            chunk_info['is_primary']
+                            chunk_info['Data'],
+                            chunk_info['Is_Primary']
                         )
                         if not chunk:
-                            return {'Status': 'FAILED', 'Reason': f'Could not create chunk {chunk_id}'}
+                            return {'Status': 'FAILED', 'Reason': f'Could not create chunk {chunk_id}','Transaction_ID': transaction_id}
                     else:
-                        self.chunk_directory.append_chunk(chunk_id, chunk_info['data'])
+                        self.chunk_directory.append_chunk(chunk_id, chunk_info['Data'])
 
                     # Move chunk from pending to committed
                     transaction['pending_chunks'].remove(chunk_id)
                     transaction['committed_chunks'].append(chunk_id)
 
-                    return {'Operation': 'COMMIT', 'Status': 'SUCCESS', 'Chunk_ID': chunk_id}
+                    return {'Operation': 'COMMIT', 'Status': 'SUCCESS', 'Chunk_ID': chunk_id,'Transaction_ID': transaction_id}
 
                 except Exception as commit_error:
                     print(f"[DEBUG] Error committing chunk {chunk_id}: {str(commit_error)}")
-                    return {'Status': 'FAILED', 'Reason': f'Error committing chunk {chunk_id}'}
+                    return {'Status': 'FAILED', 'Reason': f'Error committing chunk {chunk_id}','Transaction_ID': transaction_id}
 
             elif operation == 'ABORT':
                 # Remove this specific chunk from pending
@@ -360,11 +363,11 @@ class ChunkServer:
                 if not transaction['pending_chunks']:
                     del self.append_transactions[transaction_id]
 
-                return {'Operation': 'ABORT', 'Status': 'ABORTED', 'Chunk_ID': chunk_id}
+                return {'Operation': 'ABORT', 'Status': 'ABORTED', 'Chunk_ID': chunk_id,'Transaction_ID': transaction_id}
 
         except Exception as e:
             print(f"[DEBUG] Exception in transaction {transaction_id}: {str(e)}")
-            return {'Status': 'FAILED', 'Reason': str(e)}
+            return {'Status': 'FAILED', 'Reason': str(e),'Transaction_ID': transaction_id}
 
 
     def handle_master_commands(self):

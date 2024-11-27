@@ -143,6 +143,7 @@ class MasterServer:
                 transaction.setdefault('Commit_Responses', []).append(response_data)
             elif operation == 'ABORT':
                 transaction['Status'] = 'ABORTED'
+            self.append_transactions[transaction_id] = transaction
         else:
             print(f"Status for operation {operation}:{status} from chunkserver {chunkserver_id}")
 
@@ -523,13 +524,12 @@ class MasterServer:
         chunks_to_write = []
         remaining_data = data_length
         next_chunk_number = 0
-
         # Step 1: Check last chunk for space (if file exists)
         if file_name in self.file_chunks and self.file_chunks[file_name]:
             last_chunk_id = self.file_chunks[file_name][-1]
             primary_server_id = self.chunk_locations[last_chunk_id][0]
             _, last_chunk_number = self.parse_chunk_id(last_chunk_id)
-            next_chunk_number = last_chunk_number + 1
+            next_chunk_number = last_chunk_number
 
             print(f"[DEBUG] Last chunk found: {last_chunk_id}, primary server: {primary_server_id}")
 
@@ -553,6 +553,8 @@ class MasterServer:
                     prepare_responses = self.append_transactions[transaction_id].get('Prepare_Responses', [])
                     if prepare_responses:
                         response = prepare_responses[0]  # Primary response
+                        # Pop the response from the list
+                        self.append_transactions[transaction_id]['Prepare_Responses'] = []
                         print(f"[DEBUG] Received response from primary: {response}")
                         break
 
@@ -569,6 +571,7 @@ class MasterServer:
                     'Chunk_ID': last_chunk_id,
                     'Chunkserver_IDs': self.chunk_locations[last_chunk_id],
                     'Data_Length': data_length,
+                    'Data': data_to_append[:available_space]
                 })
                 remaining_data -= available_space
                 print(f"[DEBUG] Appending data to existing chunk: {last_chunk_id}, remaining data: {remaining_data}")
@@ -578,10 +581,14 @@ class MasterServer:
                     'Chunk_ID': last_chunk_id,
                     'Chunkserver_IDs': self.chunk_locations[last_chunk_id],
                     'Data_Length': available_space,
+                    'Data': data_to_append[:available_space]
                 })
-                remaining_data -= available_space
+                remaining_data-=available_space
+                next_chunk_number += 1
                 print(f"[DEBUG] Partial space used in chunk: {last_chunk_id}, remaining data: {remaining_data}")
-
+        else:
+            self.message_manager.send_message(conn, 'RESPONSE', {'Status': 'FAILED', 'Error': 'File not found'})
+            return 
         # Step 2: Allocate new chunks for remaining data
         while remaining_data > 0:
             chunk_data_length = min(remaining_data, CHUNK_SIZE)
@@ -595,22 +602,27 @@ class MasterServer:
                 return
 
             chunk_id = self.generate_chunk_id(file_name, next_chunk_number)
+            chunk_data = data_to_append[data_length - remaining_data:data_length - remaining_data + chunk_data_length]
+            print(chunk_data)
             chunks_to_write.append({
                 'Chunk_ID': chunk_id,
                 'Chunkserver_IDs': selected_servers,
                 'Data_Length': chunk_data_length,
+                'Data': chunk_data
             })
             self.chunk_locations[chunk_id] = selected_servers
             remaining_data -= chunk_data_length
             next_chunk_number += 1
 
             print(f"[DEBUG] New chunk allocated: {chunk_id}, servers: {selected_servers}, remaining data: {remaining_data}")
-
+        
         # Step 3: Send PREPARE to all chunkservers for new chunks
         for chunk in chunks_to_write:
             for cs_id in chunk['Chunkserver_IDs']:
                 is_primary = cs_id == chunk['Chunkserver_IDs'][0]
                 file_name,chunk_number=self.parse_chunk_id(chunk['Chunk_ID'])
+                print("Handling send for ",chunk['Chunk_ID'])
+                print("Chunk Data: ",chunk['Data'])
                 self.send_to_chunkserver(cs_id, 'REQUEST', {
                     'Operation': 'PREPARE',
                     'Transaction_ID': transaction_id,
@@ -618,8 +630,10 @@ class MasterServer:
                     'Data_Length': chunk['Data_Length'],
                     'File_Name': file_name,
                     'Primary': False,
-                    'Data': data_to_append
+                    'Data': chunk['Data']
                 })
+                time.sleep(0.1)
+                print("Done")
             print(f"[DEBUG] PREPARE sent for chunk: {chunk['Chunk_ID']}")
 
         # Step 4: Wait for all PREPARE responses
@@ -648,6 +662,7 @@ class MasterServer:
                     'Chunk_Number': chunk_number,
                     'File_Name': file_name
                 })
+                time.sleep(0.1)
             print(f"[DEBUG] COMMIT sent for chunk: {chunk['Chunk_ID']}")
 
         # Step 6: Respond to client

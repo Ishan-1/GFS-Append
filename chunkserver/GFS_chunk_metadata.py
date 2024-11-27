@@ -35,6 +35,8 @@ class Chunk_Directory:
         return True
         
     def get_chunk(self,chunk_id):
-        return self.chunk_dict[chunk_id]['Chunk']
+        if chunk_id in self.chunk_dict:
+            return self.chunk_dict[chunk_id]['Chunk']
+        return None
             
     
