@@ -179,3 +179,7 @@ Inspired by Google File System (GFS) design principles
 ### Planing Day-1
 ![](assets/1.jpeg)
 ![](assets/2.jpeg)
+
+
+
+[Youtube Video](https://youtu.be/AOH6a3y98sw)
