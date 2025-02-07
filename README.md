@@ -143,9 +143,10 @@ python GFS_chunkserver.py 8001 ./chunkserver1
 
 
 ## Authors
-Ishan Gupta
-Harsh Gupta
-
+```
+Ishan Gupta(Ishan-1)
+Harsh Gupta(harsh-gupta10)
+```
 ## Acknowledgments
 Inspired by Google File System (GFS) design principles.
 
