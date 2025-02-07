@@ -110,25 +110,6 @@ A distributed file system inspired by Google File System (GFS), featuring a robu
 - Improved transaction timeout handling
 - Comprehensive logging and monitoring
 
-## Progress Tracking
-
-### Development Status
-
-- [x] Chunk class implementation
-- [x] Chunk Directory metadata management
-- [x] Standardized message structure (JSON)
-- [x] Connection handling
-- [x] Exactly-once append implementation
-
-### Known Issues
-
-| Topic | Description | Status |
-|-------|-------------|--------|
-| Create | Chunk number initialization | Resolved |
-| Chunk Registration | Proper data transmission | Resolved |
-| Multi-Chunkserver Testing | 4 operations validation | Pending |
-| Chunkserver Fault Tolerance | Handling offline/online scenarios | Partially Resolved |
-
 ## Technical Details
 
 ### Technologies
@@ -160,26 +141,13 @@ python GFS_chunkserver.py <port> <chunk_directory>
 python GFS_chunkserver.py 8001 ./chunkserver1
 ```
 
-## Contribution
-
-Contributions are welcome! Please:
-- Submit pull requests
-- Open issues for bug reports
-- Discuss potential enhancements
-
-## License
-[Specify your project's license]
 
 ## Authors
-[Your Name/Organization]
+Ishan Gupta
+Harsh Gupta
 
 ## Acknowledgments
-Inspired by Google File System (GFS) design principles
-
-### Planing Day-1
-![](assets/1.jpeg)
-![](assets/2.jpeg)
-
+Inspired by Google File System (GFS) design principles.
 
 
 [Youtube Video](https://youtu.be/AOH6a3y98sw)
