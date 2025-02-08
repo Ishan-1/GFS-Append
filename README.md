@@ -5,6 +5,9 @@
 
 A distributed file system inspired by Google File System (GFS), featuring a robust master-chunkserver architecture with exactly-once append semantics, scalability, and fault tolerance.
 
+## Working Demo
+[Youtube Video](https://youtu.be/AOH6a3y98sw)
+
 ## Key Features
 
 - **Distributed Storage**: Scalable and fault-tolerant file system
@@ -142,7 +145,7 @@ python GFS_chunkserver.py 8001 ./chunkserver1
 ```
 
 
-## Authors
+## Contributors
 ```
 Ishan Gupta(Ishan-1)
 Harsh Gupta(harsh-gupta10)
@@ -151,4 +154,3 @@ Harsh Gupta(harsh-gupta10)
 Inspired by Google File System (GFS) design principles.
 
 
-[Youtube Video](https://youtu.be/AOH6a3y98sw)
